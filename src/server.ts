@@ -48,6 +48,7 @@ import { initializeTickets } from './routes/tickets';
 import { initAjvSchemas } from './types/ajv/Helpers'
 import { initializeSerialization } from './utils/serialization/SchemaHelpers'
 import { allowedArchiversManager } from './shardeum/allowedArchiversManager'
+import { cycleCheckpointManager } from './checkpoint/CycleData'
 
 const configFile = resolve(__dirname, '../archiver-config.json')
 const allowedArchiversConfigPath = join(__dirname, '../allowed-archivers.json')
@@ -85,9 +86,14 @@ async function start(): Promise<void> {
     Logger.mainLogger.error('Unhandled Rejection - Global:', promise, 'reason:', reason);
   });
 
-  // Initialize storage
+  // Initialize storage and checkpoints
   if (config.experimentalSnapshot) {
     await dbstore.initializeDB(config)
+    // Initialize checkpoint system
+    setInterval(() => {
+      console.log('[check-point] update checkpoint interval')
+      cycleCheckpointManager.update()
+    }, config.checkpointUpdateInterval)
   } else {
     await Storage.initStorage(config)
   }
@@ -271,10 +277,12 @@ async function syncAndStartServer(): Promise<void> {
     const cycleResult = await Data.compareWithOldCyclesData(lastStoredCycleInfo.counter)
 
     // If the cycle data does not match, clear the DB and start again
-    if (!cycleResult.success) {
-      throw Error(
+    if (!cycleResult.success) {      
+      Logger.mainLogger.error(
         'The last saved 10 cycles data does not match with the archiver data! Clear the DB and start the server again!'
       )
+      console.log('[check-point] starting syncFromPeers')
+      await cycleCheckpointManager.syncFromPeers()
     }
 
     // Update the last stored cycle count
@@ -415,9 +423,11 @@ async function syncAndStartServer(): Promise<void> {
 
     // Check for any missing data and perform syncing if necessary
     if (lastStoredCycleCount - 1 !== lastStoredCycleInfo.counter) {
-      throw Error(
+      Logger.mainLogger.error(
         `The archiver has ${lastStoredCycleCount} and the latest stored cycle is ${lastStoredCycleInfo.counter}`
       )
+      console.log('[check-point] starting syncFromPeers')
+      await cycleCheckpointManager.syncFromPeers()
     }
     await Data.syncCyclesAndTxsData(lastStoredCycleCount, lastStoredReceiptCount, lastStoredOriginalTxCount)
   } else {

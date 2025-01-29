@@ -5,7 +5,10 @@ import * as Logger from '../Logger'
 import { config } from '../Config'
 import { DeSerializeFromJsonString, SerializeToJsonString } from '../utils/serialization'
 import { Cycle, DbCycle } from './types'
-
+import { calculateBucketID, CycleCheckpointData, cycleCheckpointManager } from '../checkpoint/CycleData'
+import * as crypto from 'crypto'
+import { safeStringify } from '@shardeum-foundation/lib-types/build/src/utils/functions/stringify'
+import { CheckpointType } from '../checkpoint/CheckpointData'
 
 export async function insertCycle(cycle: Cycle): Promise<void> {
 
@@ -27,6 +30,16 @@ export async function insertCycle(cycle: Cycle): Promise<void> {
     // Execute the query directly (single-row insert)
     await db.run(cycleDatabase, sql, values);
 
+    console.log('[check-point] insertCycle start')
+    const address = crypto.createHash('sha256').update(cycle.counter.toString()).digest('hex').toLowerCase()
+    const timestamp = cycle.cycleRecord.start
+    const hash = crypto.createHash('sha256').update(safeStringify(cycle)).digest('hex').toLowerCase()
+    const classType = CheckpointType.Cycle
+    const data = cycle
+    const bucketID = calculateBucketID(cycle)
+    const checkpointData = new CycleCheckpointData(address, timestamp, hash, classType, data)
+    cycleCheckpointManager.addData(checkpointData, bucketID)
+    console.log('[check-point] insertCycle end')
     if (config.VERBOSE) {
       Logger.mainLogger.debug(
         'Successfully inserted Cycle',
@@ -44,15 +57,26 @@ export async function insertCycle(cycle: Cycle): Promise<void> {
   }
 }
 
+//change in cycle; need to update checkpoint
 export async function bulkInsertCycles(cycles: Cycle[]): Promise<void> {
-
   try {
-    // Define the table columns based on schema
-    const columns = ['cycleMarker', 'counter', 'cycleRecord'];
+    // First create checkpoints for all cycles
+    console.log('[check-point] bulkInsertCycles start')
+    for (const cycle of cycles) {
+      const address = crypto.createHash('sha256').update(cycle.counter.toString()).digest('hex').toLowerCase()
+      const timestamp = cycle.cycleRecord.start
+      const hash = crypto.createHash('sha256').update(safeStringify(cycle)).digest('hex').toLowerCase()
+      const checkpointData = new CycleCheckpointData(address, timestamp, hash, 0, cycle)
+      const bucketID = calculateBucketID(cycle)
+      cycleCheckpointManager.addData(checkpointData, bucketID)
+    }
+    console.log('[check-point] bulkInsertCycles end')
+    // Then do the database operation
+    const columns = ['cycleMarker', 'counter', 'cycleRecord']
 
     // Construct the SQL query for bulk insertion with all placeholders
-    const placeholders = cycles.map(() => `(${columns.map(() => '?').join(', ')})`).join(', ');
-    const sql = `INSERT OR REPLACE INTO cycles (${columns.join(', ')}) VALUES ${placeholders}`;
+    const placeholders = cycles.map(() => `(${columns.map(() => '?').join(', ')})`).join(', ')
+    const sql = `INSERT OR REPLACE INTO cycles (${columns.join(', ')}) VALUES ${placeholders}`
 
     // Flatten the `cycles` array into a single list of values
     const values = cycles.flatMap((cycle) =>
@@ -61,13 +85,13 @@ export async function bulkInsertCycles(cycles: Cycle[]): Promise<void> {
           ? SerializeToJsonString(cycle[column]) // Serialize objects to JSON
           : cycle[column]
       )
-    );
+    )
 
     // Execute the single query for all cycles
-    await db.run(cycleDatabase, sql, values);
+    await db.run(cycleDatabase, sql, values)
 
     if (config.VERBOSE) {
-      Logger.mainLogger.debug('Successfully inserted Cycles', cycles.length);
+      Logger.mainLogger.debug('Successfully inserted Cycles', cycles.length)
     }
   } catch (err) {
     Logger.mainLogger.error(err);
@@ -75,8 +99,18 @@ export async function bulkInsertCycles(cycles: Cycle[]): Promise<void> {
   }
 }
 
+//change in cycle; need to update checkpoint
 export async function updateCycle(marker: string, cycle: Cycle): Promise<void> {
   try {
+    // Create a checkpoint before updating
+    console.log('[check-point] updateCycle start')
+    const address = crypto.createHash('sha256').update(cycle.counter.toString()).digest('hex').toLowerCase()
+    const timestamp = cycle.cycleRecord.start
+    const hash = crypto.createHash('sha256').update(safeStringify(cycle)).digest('hex').toLowerCase()
+    const checkpointData = new CycleCheckpointData(address, timestamp, hash, 0, cycle)
+    const bucketID = calculateBucketID(cycle)
+    cycleCheckpointManager.addData(checkpointData, bucketID)
+    console.log('[check-point] updateCycle end')
     const sql = `UPDATE cycles SET counter = $counter, cycleRecord = $cycleRecord WHERE cycleMarker = $marker `
     await db.run(cycleDatabase, sql, {
       $counter: cycle.counter,
@@ -175,4 +209,27 @@ export async function queryCyleCount(): Promise<number> {
   if (cycles) cycles = cycles['COUNT(*)']
   else cycles = 0
   return cycles
+}
+
+export async function queryCycleByBucketId(bucketId: string): Promise<Cycle[]> {
+  try {
+    console.log('[check-point] queryCycleByBucketId start')
+    // Query cycles where first two chars of hashed counter match bucketId
+    const sql = `
+      SELECT * FROM cycles 
+      WHERE substr(lower(hex(hash(counter))), 1, 2) = ?
+      ORDER BY counter ASC
+    `
+    const dbCycles = (await db.all(cycleDatabase, sql, [bucketId])) as DbCycle[]
+    console.log('[check-point] queryCycleByBucketId end', dbCycles) 
+    return dbCycles.map(dbCycle => ({
+      counter: dbCycle.counter,
+      cycleRecord: DeSerializeFromJsonString(dbCycle.cycleRecord),
+      cycleMarker: dbCycle.cycleMarker,
+    }))
+  } catch (e) {
+    console.error('[check-point] queryCycleByBucketId error', e)
+    Logger.mainLogger.error('[queryCycleByBucketId]', e)
+    return []
+  }
 }

@@ -36,6 +36,9 @@ import {
 } from './primary-process'
 import * as ServiceQueue from './ServiceQueue'
 import ticketRoutes from './routes/tickets'
+import { cycleCheckpointManager } from './checkpoint/CycleData'
+import { CheckpointRadixDigest, CheckpointRadixEntry } from './checkpoint/CheckpointData'
+import { Cycle } from './dbstore/types'
 import { allowedArchiversManager } from './shardeum/allowedArchiversManager'
 
 const { version } = require('../package.json') // eslint-disable-line @typescript-eslint/no-var-requires
@@ -214,6 +217,28 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
     const res = NodeList.getCachedNodeList()
     reply.send(res)
     profilerInstance.profileSectionEnd('GET_nodelist')
+  })
+
+  // for testing purposes only
+  server.get('/get-checkpoints', async (_request: any, reply) => {
+    try {
+      console.log('[check-point] get-checkpoints')
+      const buckets = cycleCheckpointManager.checkpointBuckets
+      console.log('[check-point] get-checkpoints buckets', buckets)
+      const checkpointData = Array.from(buckets.values()).map((bucket) => ({
+        bucketId: bucket.bucketID,
+        data: { bucket },
+      }))
+      console.log('[check-point] get-checkpoints checkpointData', checkpointData)
+      reply.send(Crypto.sign({ checkpointData }))
+    } catch (error) {
+      console.error('[check-point] get-checkpoints error', error)
+      Logger.mainLogger.error('Error in checkpoint GET endpoint:', error)
+      reply.send({
+        success: false,
+        error: 'Internal server error while retrieving checkpoint data',
+      })
+    }
   })
 
   server.get('/network-txs-list', (_request, reply) => {
@@ -1290,6 +1315,102 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
 
   // Register ticket routes
   server.register(ticketRoutes, { prefix: '/tickets' })
+
+  server.post('/shareCheckpointRadixDigests', async (req: any, reply) => {
+    try {
+      console.log('[check-point] shareCheckpointRadixDigests')
+      const { bucketID, radixDigests, senderAddress } = req.body
+      console.log('[check-point] shareCheckpointRadixDigests payload', req.body)
+      if (!bucketID || !radixDigests) {
+        console.error('[check-point] shareCheckpointRadixDigests invalid payload', req.body)
+        reply.status(400).send('Invalid payload')
+        return
+      }
+
+      const bucket = cycleCheckpointManager.checkpointBuckets.get(bucketID)
+      if (!bucket) {
+        console.error('[check-point] shareCheckpointRadixDigests bucket not found', req.body)
+        reply.status(404).send('Bucket not found')
+        return
+      }
+
+      console.log('[check-point] shareCheckpointRadixDigests bucket found', bucket)
+
+      // Process received digests
+      cycleCheckpointManager.onHashDigestsReceived(senderAddress, bucketID, radixDigests)
+
+      console.log('[check-point] shareCheckpointRadixDigests onHashDigestsReceived')
+
+      // Send our digests back
+      const ourDigests: CheckpointRadixDigest[] = []
+      for (const [radix, entry] of bucket.radixEntries) {
+        entry.updateDigest()
+        ourDigests.push(entry.digest)
+      }
+
+      console.log('[check-point] shareCheckpointRadixDigests ourDigests', ourDigests)
+
+      reply.status(200).send({
+        status: 'ok',
+        radixDigests: ourDigests,
+      })
+    } catch (err) {
+      Logger.mainLogger.error('Error in shareCheckpointRadixDigests:', err)
+      reply.status(500).send('Server error')
+    }
+  })
+
+  server.post('/exchangeCheckpointRadixEntries', async (req: any, reply) => {
+    try {
+      console.log('[check-point] exchangeCheckpointRadixEntries')
+      const { bucketID, entries } = req.body
+
+      if (!bucketID || !entries) {
+        console.error('[check-point] exchangeCheckpointRadixEntries invalid payload', req.body)
+        Logger.mainLogger.error('[exchangeCheckpointRadixEntries] Invalid payload')
+        reply.status(400).send('Invalid payload')
+        return
+      }
+
+      const bucket = cycleCheckpointManager.checkpointBuckets.get(bucketID)
+      if (!bucket) {
+        console.error('[check-point] exchangeCheckpointRadixEntries bucket not found', req.body)
+        Logger.mainLogger.error(`[exchangeCheckpointRadixEntries] No bucket found for ID=${bucketID}`)
+        reply.status(404).send('Bucket not found')
+        return
+      }
+
+      // Get our entries to share back
+      const ourEntries: CheckpointRadixEntry<Cycle>[] = []
+
+      // For each incoming entry, get our corresponding entry
+      for (const incomingEntry of entries) {
+        const radix = incomingEntry.digest.radix
+        const ourEntry = bucket.radixEntries.get(radix)
+        if (ourEntry) {
+          ourEntry.updateDigest()
+          ourEntries.push(ourEntry)
+        }
+      }
+
+      console.log('[check-point] exchangeCheckpointRadixEntries ourEntries', ourEntries)
+
+      // Process their entries
+      bucket.onExchangeRadixEntries(bucketID, entries)
+
+      // Send our entries back
+      console.log('[check-point] exchangeCheckpointRadixEntries sending ourEntries', ourEntries)
+      const res = Crypto.sign({
+        bucketID,
+        entries: ourEntries,
+      })
+      reply.send(res)
+    } catch (err) {
+      console.error('[check-point] exchangeCheckpointRadixEntries error', err)
+      Logger.mainLogger.error('Error in exchangeCheckpointRadixEntries:', err)
+      reply.status(500).send('Server error')
+    }
+  })
 }
 
 export const validateRequestData = (
@@ -1352,6 +1473,7 @@ export enum RequestDataType {
   ACCOUNT = 'account',
   TRANSACTION = 'transaction',
   TOTALDATA = 'totalData',
+  CHECKPOINT = 'checkpoint',
 }
 
 export const queryFromArchivers = async (
@@ -1383,6 +1505,9 @@ export const queryFromArchivers = async (
       break
     case RequestDataType.TOTALDATA:
       url = `/totalData`
+      break
+    case RequestDataType.CHECKPOINT:
+      url = `/checkpoint`
       break
   }
   const maxNumberofArchiversToRetry = 3

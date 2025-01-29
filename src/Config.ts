@@ -16,6 +16,7 @@ export interface Config {
   ARCHIVER_DB: string // Archiver DB folder name and path
   ARCHIVER_DATA: {
     cycleDB: string
+    checkpointDB: string
     accountDB: string
     transactionDB: string
     receiptDB: string
@@ -111,6 +112,12 @@ export interface Config {
     requiredSecurityLevel: number
   }
   maxRecordsPerRequest: number // this is the equiavlent of the accountBucketSize config variable used by the validators to fetch records from the archiver
+  checkpointBucketConfig: {
+    BucketMatureAge: number //  start sharing hashes after this age is reached.
+    RadixDepth: number // 16 way trie depth in nibbles (one hex char) 
+    GiveUpAge: number // eventual give up age.  write bucket to disk in this case and raise warnings/alerts
+  }
+  checkpointUpdateInterval: number // 1 minute in milliseconds
   multisigKeysSyncFromNetworkInternal: number // in seconds
 }
 
@@ -124,6 +131,7 @@ let config: Config = {
   ARCHIVER_DB: 'archiver-db',
   ARCHIVER_DATA: {
     cycleDB: 'cycles.sqlite3',
+    checkpointDB: 'checkpoint.sqlite3',
     accountDB: 'accounts.sqlite3',
     transactionDB: 'transactions.sqlite3',
     receiptDB: 'receipts.sqlite3',
@@ -244,6 +252,13 @@ let config: Config = {
     minSigRequired: 1,
     requiredSecurityLevel: 5
   },
+  maxRecordsPerRequest: 200, 
+  checkpointBucketConfig: {
+    BucketMatureAge: 11 * 60, // 11 minutes
+    RadixDepth: 2, // 2 nibbles (1 hex char)
+    GiveUpAge: 20 * 60, // 20 minutes
+  },
+  checkpointUpdateInterval: 60 * 1000, // 1 minute in milliseconds
   maxRecordsPerRequest: 200,
   multisigKeysSyncFromNetworkInternal: 600
 }
