@@ -31,13 +31,8 @@ export async function insertCycle(cycle: Cycle): Promise<void> {
     await db.run(cycleDatabase, sql, values);
 
     console.log('[check-point] insertCycle start')
-    const address = crypto.createHash('sha256').update(cycle.counter.toString()).digest('hex').toLowerCase()
-    const timestamp = cycle.cycleRecord.start
-    const hash = crypto.createHash('sha256').update(safeStringify(cycle)).digest('hex').toLowerCase()
-    const classType = CheckpointType.Cycle
-    const data = cycle
     const bucketID = calculateBucketID(cycle)
-    const checkpointData = new CycleCheckpointData(address, timestamp, hash, classType, data)
+    const checkpointData = new CycleCheckpointData(cycle)
     cycleCheckpointManager.addData(checkpointData, bucketID)
     console.log('[check-point] insertCycle end')
     if (config.VERBOSE) {
@@ -63,10 +58,7 @@ export async function bulkInsertCycles(cycles: Cycle[]): Promise<void> {
     // First create checkpoints for all cycles
     console.log('[check-point] bulkInsertCycles start')
     for (const cycle of cycles) {
-      const address = crypto.createHash('sha256').update(cycle.counter.toString()).digest('hex').toLowerCase()
-      const timestamp = cycle.cycleRecord.start
-      const hash = crypto.createHash('sha256').update(safeStringify(cycle)).digest('hex').toLowerCase()
-      const checkpointData = new CycleCheckpointData(address, timestamp, hash, 0, cycle)
+      const checkpointData = new CycleCheckpointData(cycle)
       const bucketID = calculateBucketID(cycle)
       cycleCheckpointManager.addData(checkpointData, bucketID)
     }
@@ -105,9 +97,7 @@ export async function updateCycle(marker: string, cycle: Cycle): Promise<void> {
     // Create a checkpoint before updating
     console.log('[check-point] updateCycle start')
     const address = crypto.createHash('sha256').update(cycle.counter.toString()).digest('hex').toLowerCase()
-    const timestamp = cycle.cycleRecord.start
-    const hash = crypto.createHash('sha256').update(safeStringify(cycle)).digest('hex').toLowerCase()
-    const checkpointData = new CycleCheckpointData(address, timestamp, hash, 0, cycle)
+    const checkpointData = new CycleCheckpointData(cycle)
     const bucketID = calculateBucketID(cycle)
     cycleCheckpointManager.addData(checkpointData, bucketID)
     console.log('[check-point] updateCycle end')

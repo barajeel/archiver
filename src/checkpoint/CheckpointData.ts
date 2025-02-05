@@ -195,6 +195,8 @@ export class CheckpointBucket<T> {
   peerRadixDigests: Map<string, RadixDigestTally>
   validateData: (data: CheckpointData<T>) => Promise<boolean>
   updateData: (data: CheckpointData<T>) => Promise<void>
+  repairedPeers: Map<string, Set<string>> = new Map()
+
   constructor(
     startTime: number,
     endTime: number,
@@ -300,9 +302,7 @@ export class CheckpointBucket<T> {
       console.log('[check-point] CheckpointBucket writeToFileAndAlert end')
     } catch (err) {
       console.error('[check-point] CheckpointBucket writeToFileAndAlert error', err)
-      Logger.mainLogger.error(
-        `Bucket ${this.bucketID} failed to reach consensus after timeout.`
-      )
+      Logger.mainLogger.error(`Bucket ${this.bucketID} failed to reach consensus after timeout.`)
     }
   }
 
@@ -339,7 +339,11 @@ export class CheckpointBucket<T> {
         bucketID: this.bucketID,
         radixDigests: digests,
       }).catch((err) => {
-        console.error('[check-point] CheckpointBucket shareRadixDigests failed to share digests with peer', peerAddress, err)
+        console.error(
+          '[check-point] CheckpointBucket shareRadixDigests failed to share digests with peer',
+          peerAddress,
+          err
+        )
         Logger.mainLogger.error(`Failed to share digests with peer ${peerAddress}:`, err)
       })
     )
@@ -365,36 +369,57 @@ export class CheckpointBucket<T> {
       return
     }
 
+    // Get total number of archivers including self
+    const totalArchivers = otherArchivers.length + 1
+    const majorityThreshold = Math.floor(totalArchivers / 2) + 1
+
     console.log('[check-point] CheckpointBucket evaluateDigestConsensus iterating over peerRadixDigests')
     for (const [radix, tally] of this.peerRadixDigests) {
       const localEntry = this.radixEntries.get(radix)
       if (!localEntry) continue
 
       const ourHash = localEntry.digest.hash
-      let totalReports = 0
-      let ourHashCount = 0
+      let ourHashCount = 1 // Start with 1 for our own vote
 
-      // Count total reports and our hash count
-      for (const [hash, count] of tally.hashTally.entries()) {
-        totalReports += count
-        if (hash === ourHash) {
-          ourHashCount = count
-        }
-      }
-
-      // Calculate majority threshold (> 50% including ourselves)
-      const majorityThreshold = Math.floor((totalReports + 1) / 2) + 1
+      // Count votes for our hash
+      const ourTotalVotes = tally.hashTally.get(ourHash) || 0
+      ourHashCount += ourTotalVotes
+      const bucketAge = Date.now() - this.startTime
 
       // If we don't have majority
-      if (ourHashCount + 1 < majorityThreshold) {
-        // Find peers with different hash
-        const peersWithDifferentHash = Array.from(tally.peerDigests.entries())
-          .filter(([_, digest]) => digest.hash !== ourHash)
+      if (ourHashCount < majorityThreshold) {
+        // Get all peers we haven't tried yet
+        const untriedPeers = Array.from(tally.peerDigests.entries())
+          .filter(([peer, digest]) => {
+            return digest.hash !== ourHash && !this.repairedPeers.get(radix)?.has(peer)
+          })
           .map(([peer]) => peer)
 
-        if (peersWithDifferentHash.length > 0) {
-          const randomPeer = peersWithDifferentHash[Math.floor(Math.random() * peersWithDifferentHash.length)]
-          this.exchangeAndRepairRadix(randomPeer, radix)
+        if (untriedPeers.length > 0) {
+          // Pick random untried peer
+          const randomPeer = untriedPeers[Math.floor(Math.random() * untriedPeers.length)]
+
+          // Track that we tried this peer
+          let repairedSet = this.repairedPeers.get(radix)
+          if (!repairedSet) {
+            repairedSet = new Set<string>()
+            this.repairedPeers.set(radix, repairedSet)
+          }
+          repairedSet.add(randomPeer)
+
+          // Attempt repair
+          this.exchangeAndRepairRadix(randomPeer, radix).catch((err) => {
+            Logger.mainLogger.error(
+              `[CheckpointBucket] Failed to repair radix ${radix} with peer ${randomPeer}:`,
+              err
+            )
+          })
+        } else if (bucketAge > config.checkpointBucketConfig.GiveUpAge) {
+          // If we've tried all peers and still no consensus, log for manual intervention
+          Logger.mainLogger.error(
+            `[CheckpointBucket] Failed to reach consensus for radix ${radix} after trying all peers. ` +
+              `Our hash: ${ourHash}, Vote count: ${ourHashCount}/${totalArchivers}`
+          )
         }
       }
     }
@@ -455,7 +480,11 @@ export class CheckpointBucket<T> {
   ): void {
     console.log('[check-point] CheckpointBucket onHashDigestsReceived', senderAddress, bucketID, radixDigests)
     if (bucketID !== this.bucketID) {
-      console.error('[check-point] CheckpointBucket onHashDigestsReceived bucket mismatch', bucketID, this.bucketID)
+      console.error(
+        '[check-point] CheckpointBucket onHashDigestsReceived bucket mismatch',
+        bucketID,
+        this.bucketID
+      )
       Logger.mainLogger.debug(
         `[CheckpointBucket] onHashDigestsReceived: bucket mismatch, ignoring. Got ${bucketID}, expected ${this.bucketID}`
       )

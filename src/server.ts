@@ -49,6 +49,7 @@ import { initAjvSchemas } from './types/ajv/Helpers'
 import { initializeSerialization } from './utils/serialization/SchemaHelpers'
 import { allowedArchiversManager } from './shardeum/allowedArchiversManager'
 import { cycleCheckpointManager } from './checkpoint/CycleData'
+import { receiptCheckpointManager } from './checkpoint/ReceiptData'
 
 const configFile = resolve(__dirname, '../archiver-config.json')
 const allowedArchiversConfigPath = join(__dirname, '../allowed-archivers.json')
@@ -93,6 +94,7 @@ async function start(): Promise<void> {
     setInterval(() => {
       console.log('[check-point] update checkpoint interval')
       cycleCheckpointManager.update()
+      receiptCheckpointManager.update()
     }, config.checkpointUpdateInterval)
   } else {
     await Storage.initStorage(config)
