@@ -7,21 +7,17 @@ import {
   CheckpointRadixEntry,
   RadixDigestTally,
   DataPersistenceCallbacks,
+  CheckpointType,
 } from './CheckpointData'
 import * as crypto from 'crypto'
 import { safeStringify } from '@shardeum-foundation/lib-types/build/src/utils/functions/stringify'
-import { queryCycleByBucketId, queryCycleByMarker, updateCycle } from '../dbstore/cycles'
+import { queryCycleByMarker, updateCycle } from '../dbstore/cycles'
 import * as Logger from '../Logger'
 import * as db from '../dbstore/sqlite3storage'
-import { config } from '../Config'
-import { checkpointDatabase } from '../dbstore'
 import { queryFromArchivers } from '../API'
 import { RequestDataType } from '../API'
-
-// interface CheckpointRecord {
-//   data_json: string
-//   hash: string
-// }
+import { SerializeToJsonString } from '../utils/serialization'
+import { cycleDatabase } from '../dbstore'
 
 //Represents a single piece of cycle data``
 export class CycleCheckpointData extends CheckpointData<Cycle> {
@@ -46,12 +42,7 @@ export function calculateBucketID(cycle: Cycle): string {
     throw new Error('Invalid cycle data')
   }
 
-  // Generate address as hash of cycle number
-  const address = crypto.createHash('sha256').update(cycle.counter.toString()).digest('hex').toLowerCase()
-
-  console.log('[check-point] calculateBucketID address', address)
-  // Get first two hex chars as radix
-  return address.substring(0, 2)
+  return cycle.counter.toString()
 }
 
 //Represents a single radix entry in a bucket
@@ -77,84 +68,45 @@ export class CycleCheckpointBucket extends CheckpointBucket<Cycle> {
     validateData: (data: CheckpointData<Cycle>) => Promise<boolean>,
     updateData: (data: CheckpointData<Cycle>) => Promise<void>
   ) {
-    super(startTime, endTime, bucketID, validateData, updateData)
+    super(startTime, endTime, bucketID, validateData, updateData, CheckpointType.Cycle)
   }
 
   async update(currentTime: number): Promise<void> {
     const bucketAge = currentTime - this.startTime
 
     // Call parent update first
-    await super.update(currentTime)
+    super.update(currentTime)
 
     // Only persist if bucket has reached give up age
-    if (bucketAge > config.checkpointBucketConfig.GiveUpAge) {
-      console.log('[check-point] CycleCheckpointBucket update persistToMainTable', this.bucketID)
-      await persistToMainTable(this.bucketID)
-    }
+    // if (bucketAge > config.checkpointBucketConfig.GiveUpAge) {
+    //   console.log('[check-point] CycleCheckpointBucket update persistToMainTable', this.bucketID)
+    //   await persistToMainTable(this.bucketID)
+    // }
   }
 }
 
 //Manages all buckets, routes incoming data to the correct bucket, and does periodic updates
-export class CycleCheckpointManager extends CheckpointBucketManager<Cycle> {
-  constructor() {
+class CycleCheckpointManager extends CheckpointBucketManager<Cycle> {
+  private static instance: CycleCheckpointManager;
+
+  private constructor() {
     const persistenceCallbacks: DataPersistenceCallbacks<Cycle> = {
       validateData,
       updateData,
-      loadBucket: async (bucketID: string) => {
-        console.log('[check-point] CycleCheckpointManager loadBucket', bucketID)
-        try {
-          const cycles = await queryCycleByBucketId(bucketID)
-          if (!cycles || cycles.length === 0) return null
-
-          const bucket = new CycleCheckpointBucket(
-            cycles[0].cycleRecord.start,
-            cycles[0].cycleRecord.start + 60,
-            bucketID,
-            validateData,
-            updateData
-          )
-
-          for (const cycle of cycles) {
-            const checkpointData = new CycleCheckpointData(cycle)
-            await bucket.addData(checkpointData)
-          }
-          console.log('[check-point] CycleCheckpointManager loadBucket end')
-          return bucket
-        } catch (err) {
-          console.error('[check-point] CycleCheckpointManager loadBucket error', err)
-          Logger.mainLogger.error('[CycleCheckpointManager] Failed to load bucket:', err)
-          return null
-        }
-      },
     }
-    super(persistenceCallbacks)
+    super(persistenceCallbacks, CheckpointType.Cycle)
   }
 
-  async syncFromPeers(): Promise<void> {
-    console.log('[check-point] CycleCheckpointManager syncFromPeers start')
-    try {
-      // Get checkpoint data from other archivers
-      const checkpointData = await getCheckpointDataFromArchiver()
-
-      // Compare and sync missing/mismatched data
-      for (const data of checkpointData) {
-        const existingData: any = await db.get(
-          checkpointDatabase,
-          'SELECT hash FROM checkpoint_data WHERE hash = ?',
-          [data.hash]
-        )
-
-        if (!existingData || existingData.hash !== data.hash) {
-          await this.addData(data.checkpointData, data.bucketId)
-        }
-      }
-      console.log('[check-point] CycleCheckpointManager syncFromPeers end')
-    } catch (err) {
-      console.error('[check-point] CycleCheckpointManager syncFromPeers error', err)
-      Logger.mainLogger.error('[CycleCheckpointManager] Failed to sync from peers:', err)
+  public static getInstance(): CycleCheckpointManager {
+    if (!CycleCheckpointManager.instance) {
+      CycleCheckpointManager.instance = new CycleCheckpointManager();
     }
+    return CycleCheckpointManager.instance;
   }
 }
+
+// Export the singleton instance
+export const cycleCheckpointManager = CycleCheckpointManager.getInstance();
 
 //Represents a tally of all radix entries in the system
 export class CycleRadixDigestTally extends RadixDigestTally {
@@ -189,11 +141,7 @@ async function validateData(data: CheckpointData<Cycle>): Promise<boolean> {
   }
 
   // Verify address matches hash of cycle counter
-  const expectedAddress = crypto
-    .createHash('sha256')
-    .update(cycle.counter.toString())
-    .digest('hex')
-    .toLowerCase()
+  const expectedAddress = crypto.createHash('sha256').update(safeStringify(cycle)).digest('hex').toLowerCase().substring(0, 2)
 
   if (data.a !== expectedAddress) {
     console.error('[check-point] validateData Address mismatch')
@@ -211,18 +159,18 @@ async function validateData(data: CheckpointData<Cycle>): Promise<boolean> {
   }
 
   // Verify cycle exists in database
-  try {
-    const existingCycle = await queryCycleByMarker(cycle.cycleMarker)
-    if (!existingCycle) {
-      console.error('[check-point] validateData Cycle not found in database')
-      Logger.mainLogger.error('[CycleValidation] Cycle not found in database')
-      return false
-    }
-  } catch (err) {
-    console.error('[check-point] validateData Database query failed:', err)
-    Logger.mainLogger.error('[CycleValidation] Database query failed:', err)
-    return false
-  }
+  // try {
+  //   const existingCycle = await queryCycleByMarker(cycle.cycleMarker)
+  //   if (!existingCycle) {
+  //     console.error('[check-point] validateData Cycle not found in database')
+  //     Logger.mainLogger.error('[CycleValidation] Cycle not found in database')
+  //     return false
+  //   }
+  // } catch (err) {
+  //   console.error('[check-point] validateData Database query failed:', err)
+  //   Logger.mainLogger.error('[CycleValidation] Database query failed:', err)
+  //   return false
+  // }
 
   return true
 }
@@ -232,23 +180,40 @@ async function updateData(data: CheckpointData<Cycle>): Promise<void> {
   try {
     // Insert/Update into checkpoint_data table
     console.log('[check-point] updateData', data)
-    const sql = `
-      INSERT OR REPLACE INTO checkpoint_data (
-        address, timestamp, hash, class_type, bucket_id, data_json, processed, last_update
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `
-    const values = [
-      data.a, // address
-      data.t, // timestamp
-      data.h, // hash
-      0, // class_type (0 for cycle)
-      calculateBucketID(data.d), // bucket_id
-      safeStringify(data.d), // data_json
-      false, // processed
-      Math.floor(Date.now() / 1000), // last_update
-    ]
+    // const sql = `
+    //   INSERT OR REPLACE INTO checkpoint_data (
+    //     address, timestamp, hash, class_type, bucket_id, data_json, processed, last_update
+    //   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    // `
+    // const values = [
+    //   data.a, // address
+    //   data.t, // timestamp
+    //   data.h, // hash
+    //   0, // class_type (0 for cycle)
+    //   calculateBucketID(data.d), // bucket_id
+    //   safeStringify(data.d), // data_json
+    //   false, // processed
+    //   Math.floor(Date.now() / 1000), // last_update
+    // ]
 
-    await db.run(checkpointDatabase, sql, values)
+    // await db.run(checkpointDatabase, sql, values)
+
+    const columns = ['cycleMarker', 'counter', 'cycleRecord']
+    const placeholders = columns.map(() => '?').join(', ')
+    const cycle = data.d
+    const sql = `INSERT OR REPLACE INTO cycles (${columns.join(', ')}) VALUES ${placeholders}`;
+
+    // Map the `cycle` object to match the columns
+    const values = columns.map((column) =>
+      typeof cycle[column] === 'object'
+        ? SerializeToJsonString(cycle[column]) // Serialize objects to JSON
+        : cycle[column]
+    );
+
+    // Execute the query directly (single-row insert)
+    await db.run(cycleDatabase, sql, values);
+
+
     console.log('[check-point] updateData stored checkpoint data', data.h)
     Logger.mainLogger.debug('[CheckpointData] Stored checkpoint data:', data.h)
   } catch (err) {
@@ -266,18 +231,18 @@ async function persistToMainTable(bucketId: string): Promise<void> {
       SELECT * FROM checkpoint_data 
       WHERE bucket_id = ? AND processed = false
     `
-    const checkpoints: any[] = await db.all(checkpointDatabase, sql, [bucketId])
-    console.log('[check-point] persistToMainTable end', checkpoints)
+    // const checkpoints: any[] = await db.all(checkpointDatabase, sql, [bucketId])
+    // console.log('[check-point] persistToMainTable end', checkpoints)
 
     // Update cycles table and mark as processed
-    for (const checkpoint of checkpoints) {
-      const cycle = JSON.parse(checkpoint.data_json)
-      await updateCycle(cycle.cycleMarker, cycle)
+    // for (const checkpoint of checkpoints) {
+    //   const cycle = JSON.parse(checkpoint.data_json)
+    //   await updateCycle(cycle.cycleMarker, cycle)
 
-      await db.run(checkpointDatabase, 'UPDATE checkpoint_data SET processed = true WHERE hash = ?', [
-        checkpoint.hash,
-      ])
-    }
+    //   await db.run(checkpointDatabase, 'UPDATE checkpoint_data SET processed = true WHERE hash = ?', [
+    //     checkpoint.hash,
+    //   ])
+    // }
     console.log('[check-point] persistToMainTable end')
   } catch (err) {
     console.error('[check-point] persistToMainTable Failed to persist bucket:', bucketId, err)
@@ -287,7 +252,7 @@ async function persistToMainTable(bucketId: string): Promise<void> {
 }
 
 // Create a singleton instance
-export const cycleCheckpointManager = new CycleCheckpointManager()
+// export const cycleCheckpointManager = new CycleCheckpointManager()
 export async function getCheckpointDataFromArchiver(): Promise<any[]> {
   try {
     console.log('[check-point] getCheckpointDataFromArchiver start')

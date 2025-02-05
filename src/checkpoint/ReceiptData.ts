@@ -1,4 +1,4 @@
-import { CheckpointBucketManager, CheckpointData } from './CheckpointData'
+import { CheckpointBucketManager, CheckpointData, CheckpointType } from './CheckpointData'
 import { Receipt as ReceiptType, ArchiverReceipt, SignedReceipt } from '../dbstore/receipts'
 import * as ReceiptDB from '../dbstore/receipts'
 import * as Logger from '../Logger'
@@ -23,18 +23,27 @@ export class ReceiptCheckpointData extends CheckpointData<ReceiptType | Archiver
   }
 }
 
-export class ReceiptCheckpointManager extends CheckpointBucketManager<ReceiptType | ArchiverReceipt> {
-  constructor() {
+class ReceiptCheckpointManager extends CheckpointBucketManager<ReceiptType | ArchiverReceipt> {
+  private static instance: ReceiptCheckpointManager;
+
+  private constructor() {
     super({
       validateData: ReceiptCheckpointManager.validateData,
       updateData: ReceiptCheckpointManager.updateData,
-    })
+    }, CheckpointType.Receipt)
   }
 
-  public addReceipt(receipt: ReceiptType | ArchiverReceipt): void {
-    const checkpointData = new ReceiptCheckpointData(receipt)
-    this.addData(checkpointData, receipt.cycle.toString())
+  public static getInstance(): ReceiptCheckpointManager {
+    if (!ReceiptCheckpointManager.instance) {
+      ReceiptCheckpointManager.instance = new ReceiptCheckpointManager();
+    }
+    return ReceiptCheckpointManager.instance;
   }
+
+  // public addReceipt(receipt: ReceiptType | ArchiverReceipt): void {
+  //   const checkpointData = new ReceiptCheckpointData(receipt)
+  //   this.addData(checkpointData, receipt.cycle.toString())
+  // } // TODO : the manager should handle this outside instead of being handled internally, checkout cycleCheckpointManager.addData in dbStore
 
   private static async validateData(data: CheckpointData<ReceiptType | ArchiverReceipt>): Promise<boolean> {
     try {
@@ -42,8 +51,8 @@ export class ReceiptCheckpointManager extends CheckpointBucketManager<ReceiptTyp
 
       if (verifyHash !== data.h) return false
 
-      const validationResult = await verifyReceiptData(data.d, true)
-      if (!validationResult.success) return false
+      // const validationResult = await verifyReceiptData(data.d, true)
+      // if (!validationResult.success) return false
 
       const appValidation = await verifyAppReceiptData(data.d, null, [], [])
       return appValidation.valid
@@ -84,4 +93,5 @@ export class ReceiptCheckpointManager extends CheckpointBucketManager<ReceiptTyp
   }
 }
 
-export const receiptCheckpointManager = new ReceiptCheckpointManager()
+// Export the singleton instance
+export const receiptCheckpointManager = ReceiptCheckpointManager.getInstance();

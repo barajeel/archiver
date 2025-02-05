@@ -4,6 +4,8 @@ import { originalTxDataDatabase } from '.'
 import * as Logger from '../Logger'
 import { config } from '../Config'
 import { DeSerializeFromJsonString, SerializeToJsonString } from '../utils/serialization'
+import { originalTxCheckpointManager } from '../checkpoint/OriginalTxsData'
+import { OriginalTxCheckpointData } from '../checkpoint/OriginalTxsData'
 
 export interface OriginalTxData {
   txId: string
@@ -64,13 +66,18 @@ export async function insertOriginalTxData(originalTxData: OriginalTxData): Prom
 export async function bulkInsertOriginalTxsData(originalTxsData: OriginalTxData[]): Promise<void> {
 
   try {
-    
-    // Define the table columns
-    const columns = ['txId', 'timestamp', 'cycle', 'originalTxData'];
+    // First create checkpoints for all originalTxs
+    console.log('[check-point] bulkInsertOriginalTxsData start')
+    for (const originalTx of originalTxsData) {
+      const checkpointData = new OriginalTxCheckpointData(originalTx)
+      originalTxCheckpointManager.addData(checkpointData, checkpointData.a) // need to keep track of what they keys are for different class types
+    }
+    console.log('[check-point] bulkInsertOriginalTxsData end')
 
-    // Construct the SQL query for bulk insertion with all placeholders
-    const placeholders = originalTxsData.map(() => `(${columns.map(() => '?').join(', ')})`).join(', ');
-    const sql = `INSERT OR REPLACE INTO originalTxsData (${columns.join(', ')}) VALUES ${placeholders}`;
+    // Then do the database operation
+    const columns = ['txId', 'timestamp', 'cycle', 'originalTxData']
+    const placeholders = originalTxsData.map(() => `(${columns.map(() => '?').join(', ')})`).join(', ')
+    const sql = `INSERT OR REPLACE INTO originalTxsData (${columns.join(', ')}) VALUES ${placeholders}`
 
     // Flatten the `originalTxsData` array into a single list of values
     const values = originalTxsData.flatMap((txData) =>

@@ -5,7 +5,8 @@ import * as Logger from '../Logger'
 import { config } from '../Config'
 import { DeSerializeFromJsonString, SerializeToJsonString } from '../utils/serialization'
 import { Cycle, DbCycle } from './types'
-import { calculateBucketID, CycleCheckpointData, cycleCheckpointManager } from '../checkpoint/CycleData'
+import { calculateBucketID, CycleCheckpointData } from '../checkpoint/CycleData'
+import { cycleCheckpointManager } from '../checkpoint/CycleData'
 import * as crypto from 'crypto'
 import { safeStringify } from '@shardeum-foundation/lib-types/build/src/utils/functions/stringify'
 import { CheckpointType } from '../checkpoint/CheckpointData'
@@ -96,7 +97,6 @@ export async function updateCycle(marker: string, cycle: Cycle): Promise<void> {
   try {
     // Create a checkpoint before updating
     console.log('[check-point] updateCycle start')
-    const address = crypto.createHash('sha256').update(cycle.counter.toString()).digest('hex').toLowerCase()
     const checkpointData = new CycleCheckpointData(cycle)
     const bucketID = calculateBucketID(cycle)
     cycleCheckpointManager.addData(checkpointData, bucketID)

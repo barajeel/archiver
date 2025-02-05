@@ -41,7 +41,6 @@ import { AccountsCopy } from '../dbstore/accounts'
 import { getJson } from '../P2P'
 import { robustQuery } from '../Utils'
 import { Utils as StringUtils } from '@shardeum-foundation/lib-types'
-import { cycleCheckpointManager } from '../checkpoint/CycleData'
 
 export const socketClients: Map<string, SocketIOClientStatic['Socket']> = new Map()
 export let combineAccountsData = {
@@ -1260,11 +1259,6 @@ export async function syncCyclesAndNodeList(lastStoredCycleCount = 0): Promise<v
   const cycleToSyncTo = await getNewestCycleFromArchivers()
   Logger.mainLogger.debug('cycleToSyncTo', cycleToSyncTo)
   Logger.mainLogger.debug(`Syncing till cycle ${cycleToSyncTo.counter}...`)
-  
-  // First sync checkpoints to ensure consistency
-  console.log('[check-point] syncCyclesAndNodeList start')
-  await cycleCheckpointManager.syncFromPeers()
-  console.log('[check-point] syncCyclesAndNodeList end')
   
   const cyclesToGet = 2 * Math.floor(Math.sqrt(cycleToSyncTo.active)) + 2
   Logger.mainLogger.debug(`Cycles to get is ${cyclesToGet}`)

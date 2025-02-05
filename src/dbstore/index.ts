@@ -15,7 +15,6 @@ export const initializeDB = async (config: Config): Promise<void> => {
   createDirectories(config.ARCHIVER_DB)
   accountDatabase = await createDB(`${config.ARCHIVER_DB}/${config.ARCHIVER_DATA.accountDB}`, 'Account')
   cycleDatabase = await createDB(`${config.ARCHIVER_DB}/${config.ARCHIVER_DATA.cycleDB}`, 'Cycle')
-  checkpointDatabase = await createDB(`${config.ARCHIVER_DB}/${config.ARCHIVER_DATA.checkpointDB}`, 'Checkpoint')
   transactionDatabase = await createDB(
     `${config.ARCHIVER_DB}/${config.ARCHIVER_DATA.transactionDB}`,
     'Transaction'
@@ -112,28 +111,28 @@ export const initializeDB = async (config: Config): Promise<void> => {
   )
 
   // Checkpoint data table
-  console.log('[check-point] initializeDB checkpointDatabase start')
-  await runCreate(
-    checkpointDatabase,
-    'CREATE TABLE IF NOT EXISTS checkpoint_data ( ' +
-      'address TEXT NOT NULL, ' +
-      'timestamp INTEGER NOT NULL, ' +
-      'hash TEXT PRIMARY KEY, ' +
-      'class_type INTEGER NOT NULL, ' +
-      'bucket_id TEXT NOT NULL, ' +
-      'data_json TEXT NOT NULL, ' +
-      'processed BOOLEAN DEFAULT FALSE, ' +
-      'last_update INTEGER ' +
-      ')'
-  )
-  await runCreate(
-    checkpointDatabase,
-    'CREATE INDEX IF NOT EXISTS idx_bucket_address ON checkpoint_data (bucket_id, address)'
-  )
-  await runCreate(
-    checkpointDatabase,
-    'CREATE INDEX IF NOT EXISTS idx_timestamp ON checkpoint_data (timestamp)'
-  )
+  // console.log('[check-point] initializeDB checkpointDatabase start')
+  // await runCreate(
+  //   checkpointDatabase,
+  //   'CREATE TABLE IF NOT EXISTS checkpoint_data ( ' +
+  //     'address TEXT NOT NULL, ' +
+  //     'timestamp INTEGER NOT NULL, ' +
+  //     'hash TEXT PRIMARY KEY, ' +
+  //     'class_type INTEGER NOT NULL, ' +
+  //     'bucket_id TEXT NOT NULL, ' +
+  //     'data_json TEXT NOT NULL, ' +
+  //     'processed BOOLEAN DEFAULT FALSE, ' +
+  //     'last_update INTEGER ' +
+  //     ')'
+  // )
+  // await runCreate(
+  //   checkpointDatabase,
+  //   'CREATE INDEX IF NOT EXISTS idx_bucket_address ON checkpoint_data (bucket_id, address)'
+  // )
+  // await runCreate(
+  //   checkpointDatabase,
+  //   'CREATE INDEX IF NOT EXISTS idx_timestamp ON checkpoint_data (timestamp)'
+  // )
 }
 
 export const closeDatabase = async (): Promise<void> => {

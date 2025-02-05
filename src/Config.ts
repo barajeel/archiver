@@ -16,7 +16,6 @@ export interface Config {
   ARCHIVER_DB: string // Archiver DB folder name and path
   ARCHIVER_DATA: {
     cycleDB: string
-    checkpointDB: string
     accountDB: string
     transactionDB: string
     receiptDB: string
@@ -131,7 +130,6 @@ let config: Config = {
   ARCHIVER_DB: 'archiver-db',
   ARCHIVER_DATA: {
     cycleDB: 'cycles.sqlite3',
-    checkpointDB: 'checkpoint.sqlite3',
     accountDB: 'accounts.sqlite3',
     transactionDB: 'transactions.sqlite3',
     receiptDB: 'receipts.sqlite3',

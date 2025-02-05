@@ -36,10 +36,13 @@ import {
 } from './primary-process'
 import * as ServiceQueue from './ServiceQueue'
 import ticketRoutes from './routes/tickets'
-import { cycleCheckpointManager } from './checkpoint/CycleData'
-import { CheckpointRadixDigest, CheckpointRadixEntry } from './checkpoint/CheckpointData'
 import { Cycle } from './dbstore/types'
 import { allowedArchiversManager } from './shardeum/allowedArchiversManager'
+import { cycleCheckpointManager } from './checkpoint/CycleData'
+import { receiptCheckpointManager } from './checkpoint/ReceiptData'
+import { originalTxCheckpointManager } from './checkpoint/OriginalTxsData'
+import { CheckpointBucketManager, CheckpointRadixEntry } from './checkpoint/CheckpointData'
+import { CheckpointType } from './checkpoint/CheckpointData'
 
 const { version } = require('../package.json') // eslint-disable-line @typescript-eslint/no-var-requires
 const TXID_LENGTH = 64
@@ -1319,7 +1322,7 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
   server.post('/shareCheckpointRadixDigests', async (req: any, reply) => {
     try {
       console.log('[check-point] shareCheckpointRadixDigests')
-      const { bucketID, radixDigests, senderAddress } = req.body
+      const { bucketID, radixDigests, senderAddress, checkpointType } = req.body
       console.log('[check-point] shareCheckpointRadixDigests payload', req.body)
       if (!bucketID || !radixDigests) {
         console.error('[check-point] shareCheckpointRadixDigests invalid payload', req.body)
@@ -1327,7 +1330,15 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
         return
       }
 
-      const bucket = cycleCheckpointManager.checkpointBuckets.get(bucketID)
+      let manager: CheckpointBucketManager<any>
+      if (checkpointType === CheckpointType.Cycle) {
+        manager = cycleCheckpointManager
+      } else if (checkpointType === CheckpointType.OriginalTx) {
+        manager = originalTxCheckpointManager
+      } else if (checkpointType === CheckpointType.Receipt) {
+        manager = receiptCheckpointManager
+      }
+      const bucket = manager.checkpointBuckets.get(bucketID)
       if (!bucket) {
         console.error('[check-point] shareCheckpointRadixDigests bucket not found', req.body)
         reply.status(404).send('Bucket not found')
@@ -1337,22 +1348,12 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
       console.log('[check-point] shareCheckpointRadixDigests bucket found', bucket)
 
       // Process received digests
-      cycleCheckpointManager.onHashDigestsReceived(senderAddress, bucketID, radixDigests)
+      manager.onHashDigestsReceived(senderAddress, bucketID, radixDigests)
 
       console.log('[check-point] shareCheckpointRadixDigests onHashDigestsReceived')
 
-      // Send our digests back
-      const ourDigests: CheckpointRadixDigest[] = []
-      for (const [radix, entry] of bucket.radixEntries) {
-        entry.updateDigest()
-        ourDigests.push(entry.digest)
-      }
-
-      console.log('[check-point] shareCheckpointRadixDigests ourDigests', ourDigests)
-
       reply.status(200).send({
         status: 'ok',
-        radixDigests: ourDigests,
       })
     } catch (err) {
       Logger.mainLogger.error('Error in shareCheckpointRadixDigests:', err)
@@ -1363,7 +1364,7 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
   server.post('/exchangeCheckpointRadixEntries', async (req: any, reply) => {
     try {
       console.log('[check-point] exchangeCheckpointRadixEntries')
-      const { bucketID, entries } = req.body
+      const { bucketID, entries, checkpointType } = req.body
 
       if (!bucketID || !entries) {
         console.error('[check-point] exchangeCheckpointRadixEntries invalid payload', req.body)
@@ -1372,7 +1373,15 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
         return
       }
 
-      const bucket = cycleCheckpointManager.checkpointBuckets.get(bucketID)
+      let manager: CheckpointBucketManager<any>
+      if (checkpointType === CheckpointType.Cycle) {
+        manager = cycleCheckpointManager
+      } else if (checkpointType === CheckpointType.OriginalTx) {
+        manager = originalTxCheckpointManager
+      } else if (checkpointType === CheckpointType.Receipt) {
+        manager = receiptCheckpointManager
+      }
+      const bucket = manager.checkpointBuckets.get(bucketID)
       if (!bucket) {
         console.error('[check-point] exchangeCheckpointRadixEntries bucket not found', req.body)
         Logger.mainLogger.error(`[exchangeCheckpointRadixEntries] No bucket found for ID=${bucketID}`)
