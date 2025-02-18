@@ -1,13 +1,11 @@
 import { CheckpointBucketManager, CheckpointData, CheckpointType } from './CheckpointData'
 import { Receipt as ReceiptType, ArchiverReceipt, SignedReceipt } from '../dbstore/receipts'
-import * as ReceiptDB from '../dbstore/receipts'
 import * as Logger from '../Logger'
 import * as crypto from 'crypto'
-import { verifyReceiptData } from '../Data/Collector'
 import { verifyAppReceiptData } from '../shardeum/verifyAppReceiptData'
 import { safeStringify } from '@shardeum-foundation/lib-types/build/src/utils/functions/stringify'
 import * as db from '../dbstore/sqlite3storage'
-import { checkpointDatabase, receiptDatabase } from '../dbstore'
+import { receiptDatabase } from '../dbstore'
 import { SerializeToJsonString } from '../utils/serialization'
 
 export class ReceiptCheckpointData extends CheckpointData<ReceiptType | ArchiverReceipt> {
@@ -44,19 +42,11 @@ class ReceiptCheckpointManager extends CheckpointBucketManager<ReceiptType | Arc
     return ReceiptCheckpointManager.instance
   }
 
-  // public addReceipt(receipt: ReceiptType | ArchiverReceipt): void {
-  //   const checkpointData = new ReceiptCheckpointData(receipt)
-  //   this.addData(checkpointData, receipt.cycle.toString())
-  // } // TODO : the manager should handle this outside instead of being handled internally, checkout cycleCheckpointManager.addData in dbStore
-
   private static async validateData(data: CheckpointData<ReceiptType | ArchiverReceipt>): Promise<boolean> {
     try {
       const verifyHash = crypto.createHash('sha256').update(safeStringify(data.d)).digest('hex').toLowerCase()
 
       if (verifyHash !== data.h) return false
-
-      // const validationResult = await verifyReceiptData(data.d, true)
-      // if (!validationResult.success) return false
 
       const appValidation = await verifyAppReceiptData(data.d, null, [], [])
       return appValidation.valid
@@ -69,8 +59,6 @@ class ReceiptCheckpointManager extends CheckpointBucketManager<ReceiptType | Arc
   private static async updateData(data: CheckpointData<ReceiptType>): Promise<void> {
     try {
       // Insert/Update into checkpoint_data table
-      console.log('[check-point] updateData', data)
-
       const columns = [
         'receiptId',
         'tx',
@@ -86,7 +74,6 @@ class ReceiptCheckpointManager extends CheckpointBucketManager<ReceiptType | Arc
       ]
       const receipt = data.d
       const sql = `INSERT OR REPLACE INTO receipts (${columns.join(', ')}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      console.log('[my-log] receipt insert sql: ', sql)
 
       // Calculate median offset for apply timestamp
       const sortedVoteOffsets = receipt.globalModification
@@ -121,11 +108,9 @@ class ReceiptCheckpointManager extends CheckpointBucketManager<ReceiptType | Arc
       // Execute the query directly (single-row insert)
       await db.run(receiptDatabase, sql, values)
 
-      console.log('[check-point] updateData stored checkpoint data', data.h)
-      Logger.mainLogger.debug('[CheckpointData] Stored checkpoint data:', data.h)
+      Logger.mainLogger.debug('receipt checkpoint data stored')
     } catch (err) {
-      console.error('[check-point] updateData Failed to store checkpoint data:', err)
-      Logger.mainLogger.error('[CheckpointData] Failed to store checkpoint data:', err)
+      Logger.mainLogger.error('Failed to store receipt checkpoint data:', err)
       throw err
     }
   }

@@ -7,11 +7,10 @@ import {
   CheckpointBucket,
   CheckpointType,
 } from './CheckpointData'
-import { config } from '../Config'
 import * as crypto from 'crypto'
 import { OriginalTxData } from '../dbstore/originalTxsData'
 import { safeStringify } from '@shardeum-foundation/lib-types/build/src/utils/functions/stringify'
-import { checkpointDatabase, originalTxDataDatabase } from '../dbstore'
+import { originalTxDataDatabase } from '../dbstore'
 import * as Logger from '../Logger'
 import { SerializeToJsonString } from '../utils/serialization'
 
@@ -81,12 +80,9 @@ export const originalTxCheckpointManager = OriginalTxCheckpointManager.getInstan
 async function updateData(data: CheckpointData<OriginalTxData>): Promise<void> {
   try {
     // Insert/Update into originalTxsData table
-    console.log('[check-point] updateData originalTx', data)
-
     const columns = ['txId', 'timestamp', 'cycle', 'originalTxData']
     const originalTx = data.d
     const sql = `INSERT OR REPLACE INTO originalTxsData (${columns.join(', ')}) VALUES (?, ?, ?, ?)`
-    console.log('[my-log] originalTx insert sql: ', sql)
 
     // Map the `originalTx` object to match the columns
     const values = [
@@ -101,11 +97,9 @@ async function updateData(data: CheckpointData<OriginalTxData>): Promise<void> {
     // Execute the query directly (single-row insert)
     await db.run(originalTxDataDatabase, sql, values)
 
-    console.log('[check-point] updateData stored originalTx checkpoint data', data.h)
-    Logger.mainLogger.debug('[CheckpointData] Stored originalTx checkpoint data:', data.h)
+    Logger.mainLogger.debug('originalTx checkpoint data stored')
   } catch (err) {
-    console.error('[check-point] updateData Failed to store originalTx checkpoint data:', err)
-    Logger.mainLogger.error('[CheckpointData] Failed to store originalTx checkpoint data:', err)
+    Logger.mainLogger.error('Failed to store originalTx checkpoint data:', err)
     throw err
   }
 }
@@ -115,32 +109,4 @@ async function validateData(data: CheckpointData<OriginalTxData>): Promise<boole
   // Reuse existing validation logic
   const { validateOriginalTxData } = require('../Data/Collector')
   return validateOriginalTxData(data.d)
-}
-
-// Persist checkpoint data to main table
-async function persistToMainTable(bucketId: string): Promise<void> {
-  try {
-    console.log('[check-point] persistToMainTable originalTx start', bucketId)
-    const sql = `
-      SELECT * FROM checkpoint_data 
-      WHERE bucket_id = ? AND class_type = 1 AND processed = false
-    `
-    const checkpoints: any[] = await db.all(checkpointDatabase, sql, [bucketId])
-    console.log('[check-point] persistToMainTable originalTx found', checkpoints.length)
-
-    // Update originalTxsData table and mark as processed
-    for (const checkpoint of checkpoints) {
-      const originalTxData = JSON.parse(checkpoint.data_json)
-      await require('../dbstore/originalTxsData').bulkInsertOriginalTxsData([originalTxData])
-
-      await db.run(checkpointDatabase, 'UPDATE checkpoint_data SET processed = true WHERE hash = ?', [
-        checkpoint.hash,
-      ])
-    }
-    console.log('[check-point] persistToMainTable originalTx end')
-  } catch (err) {
-    console.error('[check-point] persistToMainTable Failed to persist originalTx bucket:', bucketId, err)
-    Logger.mainLogger.error('[CheckpointData] Failed to persist originalTx bucket:', bucketId, err)
-    throw err
-  }
 }

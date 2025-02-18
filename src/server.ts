@@ -195,19 +195,19 @@ async function start(): Promise<void> {
   }, 60 * 1000); // Start after 60 seconds
 
 
+  Logger.mainLogger.debug('Starting checkpoint update interval')
   // Initialize checkpoint system with null checks
   setInterval(() => {
     if (cycleCheckpointManager && receiptCheckpointManager && originalTxCheckpointManager) {
-      console.log('[check-point] update checkpoint interval')
       try {
         cycleCheckpointManager.update()
         receiptCheckpointManager.update()
         originalTxCheckpointManager.update()
       } catch (err) {
-        Logger.mainLogger.error('[check-point] Error updating checkpoints:', err)
+        Logger.mainLogger.error('Error updating checkpoints:', err)
       }
     } else {
-      Logger.mainLogger.error('[check-point] One or more checkpoint managers not initialized')
+      Logger.mainLogger.error('One or more checkpoint managers not initialized')
     }
   }, config.checkpointUpdateInterval)
 }
@@ -378,9 +378,8 @@ async function syncAndStartServer(): Promise<void> {
 
     // If the receipt data does not match, clear the DB and start again
     if (!receiptResult.success) {
-      // TODO : Revisit this to see if it was fine to switch to logging an error instead of throwing it
-      Logger.mainLogger.error(
-        'The last saved 10 cycles data does not match with the archiver data! Clear the DB and start the server again!'
+      throw Error(
+        'The saved Original-Txs of last 10 cycles data do not match with the archiver data! Clear the DB and start the server again!'
       )
     }
 
@@ -440,8 +439,8 @@ async function syncAndStartServer(): Promise<void> {
 
     // Check for any missing data and perform syncing if necessary
     if (lastStoredCycleCount - 1 !== lastStoredCycleInfo.counter) {
-      Logger.mainLogger.error(
-        `The archiver has ${lastStoredCycleCount} and the latest stored cycle is ${lastStoredCycleInfo.counter}, lookout for data mismatch and repair`
+      throw Error(
+        `The archiver has ${lastStoredCycleCount} and the latest stored cycle is ${lastStoredCycleInfo.counter}`
       )
     }
     await Data.syncCyclesAndTxsData(lastStoredCycleCount, lastStoredReceiptCount, lastStoredOriginalTxCount)

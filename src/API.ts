@@ -43,7 +43,7 @@ import { receiptCheckpointManager } from './checkpoint/ReceiptData'
 import { originalTxCheckpointManager } from './checkpoint/OriginalTxsData'
 import { CheckpointBucketManager, CheckpointRadixEntry } from './checkpoint/CheckpointData'
 import { CheckpointType } from './checkpoint/CheckpointData'
-import { safeJsonParse, safeStringify } from '@shardeum-foundation/lib-types/build/src/utils/functions/stringify'
+import { safeJsonParse } from '@shardeum-foundation/lib-types/build/src/utils/functions/stringify'
 
 const { version } = require('../package.json') // eslint-disable-line @typescript-eslint/no-var-requires
 const TXID_LENGTH = 64
@@ -1322,15 +1322,14 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
 
   server.post('/shareCheckpointRadixDigests', async (req: any, reply) => {
     try {
-      console.log('[check-point] shareCheckpointRadixDigests')
       const { bucketID, radixDigests, senderAddress, checkpointType } = req.body
-      console.log('[check-point] shareCheckpointRadixDigests payload', req.body)
       if (!bucketID || !radixDigests) {
-        console.error('[check-point] shareCheckpointRadixDigests invalid payload', req.body)
+        Logger.mainLogger.error('Invalid payload')
         reply.status(400).send('Invalid payload')
         return
       }
 
+      //Identify the correct manager based on the checkpoint type
       let manager: CheckpointBucketManager<any>
       if (checkpointType === CheckpointType.Cycle) {
         manager = cycleCheckpointManager
@@ -1341,17 +1340,13 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
       }
       const bucket = manager.checkpointBuckets.get(bucketID)
       if (!bucket) {
-        console.error('[check-point] shareCheckpointRadixDigests bucket not found', req.body)
+        Logger.mainLogger.error('No bucket found for ID=${bucketID}')
         reply.status(404).send('Bucket not found')
         return
       }
 
-      console.log('[check-point] shareCheckpointRadixDigests bucket found', bucket)
-
       // Process received digests
       manager.onHashDigestsReceived(senderAddress, bucketID, safeJsonParse(radixDigests))
-
-      console.log('[check-point] shareCheckpointRadixDigests onHashDigestsReceived')
 
       reply.status(200).send({
         status: 'ok',
@@ -1364,12 +1359,9 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
 
   server.post('/exchangeCheckpointRadixEntries', async (req: any, reply) => {
     try {
-      console.log('[check-point] exchangeCheckpointRadixEntries')
       const { bucketID, entries, checkpointType } = req.body
-
       if (!bucketID || !entries) {
-        console.error('[check-point] exchangeCheckpointRadixEntries invalid payload', req.body)
-        Logger.mainLogger.error('[exchangeCheckpointRadixEntries] Invalid payload')
+        Logger.mainLogger.error('Invalid payload')
         reply.status(400).send('Invalid payload')
         return
       }
@@ -1384,8 +1376,7 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
       }
       const bucket = manager.checkpointBuckets.get(bucketID)
       if (!bucket) {
-        console.error('[check-point] exchangeCheckpointRadixEntries bucket not found', req.body)
-        Logger.mainLogger.error(`[exchangeCheckpointRadixEntries] No bucket found for ID=${bucketID}`)
+        Logger.mainLogger.error(`No bucket found for ID=${bucketID}`)
         reply.status(404).send('Bucket not found')
         return
       }
@@ -1403,20 +1394,16 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
         }
       }
 
-      console.log('[check-point] exchangeCheckpointRadixEntries ourEntries', ourEntries)
-
       // Process their entries
       bucket.onExchangeRadixEntries(bucketID, entries)
 
       // Send our entries back
-      console.log('[check-point] exchangeCheckpointRadixEntries sending ourEntries', ourEntries)
       const res = Crypto.sign({
         bucketID,
         entries: ourEntries,
       })
       reply.send(res)
     } catch (err) {
-      console.error('[check-point] exchangeCheckpointRadixEntries error', err)
       Logger.mainLogger.error('Error in exchangeCheckpointRadixEntries:', err)
       reply.status(500).send('Server error')
     }
@@ -1515,9 +1502,6 @@ export const queryFromArchivers = async (
       break
     case RequestDataType.TOTALDATA:
       url = `/totalData`
-      break
-    case RequestDataType.CHECKPOINT:
-      url = `/checkpoint`
       break
   }
   const maxNumberofArchiversToRetry = 3

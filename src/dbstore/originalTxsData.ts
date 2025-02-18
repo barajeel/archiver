@@ -33,6 +33,10 @@ export async function insertOriginalTxData(originalTxData: OriginalTxData): Prom
 
   try {
 
+    //Create checkpoint for originalTxData
+    const checkpointData = new OriginalTxCheckpointData(originalTxData)
+    originalTxCheckpointManager.addData(checkpointData, checkpointData.d.cycle.toString())
+
     // Define the table columns based on schema
     const columns = ['txId', 'timestamp', 'cycle', 'originalTxData'];
 
@@ -66,13 +70,11 @@ export async function insertOriginalTxData(originalTxData: OriginalTxData): Prom
 export async function bulkInsertOriginalTxsData(originalTxsData: OriginalTxData[]): Promise<void> {
 
   try {
-    // First create checkpoints for all originalTxs
-    console.log('[check-point] bulkInsertOriginalTxsData start')
+    // Create checkpoints for all originalTxs
     for (const originalTx of originalTxsData) {
       const checkpointData = new OriginalTxCheckpointData(originalTx)
-      originalTxCheckpointManager.addData(checkpointData, checkpointData.a) // need to keep track of what they keys are for different class types
+      originalTxCheckpointManager.addData(checkpointData, checkpointData.d.cycle.toString())
     }
-    console.log('[check-point] bulkInsertOriginalTxsData end')
 
     // Then do the database operation
     const columns = ['txId', 'timestamp', 'cycle', 'originalTxData']

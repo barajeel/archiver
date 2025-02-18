@@ -7,9 +7,6 @@ import { DeSerializeFromJsonString, SerializeToJsonString } from '../utils/seria
 import { Cycle, DbCycle } from './types'
 import { calculateBucketID, CycleCheckpointData } from '../checkpoint/CycleData'
 import { cycleCheckpointManager } from '../checkpoint/CycleData'
-import * as crypto from 'crypto'
-import { safeStringify } from '@shardeum-foundation/lib-types/build/src/utils/functions/stringify'
-import { CheckpointType } from '../checkpoint/CheckpointData'
 
 export async function insertCycle(cycle: Cycle): Promise<void> {
 
@@ -31,11 +28,11 @@ export async function insertCycle(cycle: Cycle): Promise<void> {
     // Execute the query directly (single-row insert)
     await db.run(cycleDatabase, sql, values);
 
-    console.log('[check-point] insertCycle start')
+    //Create checkpoint for cycle
     const bucketID = calculateBucketID(cycle)
     const checkpointData = new CycleCheckpointData(cycle)
     cycleCheckpointManager.addData(checkpointData, bucketID)
-    console.log('[check-point] insertCycle end')
+    
     if (config.VERBOSE) {
       Logger.mainLogger.debug(
         'Successfully inserted Cycle',
@@ -53,17 +50,14 @@ export async function insertCycle(cycle: Cycle): Promise<void> {
   }
 }
 
-//change in cycle; need to update checkpoint
 export async function bulkInsertCycles(cycles: Cycle[]): Promise<void> {
   try {
-    // First create checkpoints for all cycles
-    console.log('[check-point] bulkInsertCycles start')
+    // Create checkpoints for all cycles
     for (const cycle of cycles) {
       const checkpointData = new CycleCheckpointData(cycle)
       const bucketID = calculateBucketID(cycle)
       cycleCheckpointManager.addData(checkpointData, bucketID)
     }
-    console.log('[check-point] bulkInsertCycles end')
     // Then do the database operation
     const columns = ['cycleMarker', 'counter', 'cycleRecord']
 
@@ -92,15 +86,12 @@ export async function bulkInsertCycles(cycles: Cycle[]): Promise<void> {
   }
 }
 
-//change in cycle; need to update checkpoint
 export async function updateCycle(marker: string, cycle: Cycle): Promise<void> {
   try {
     // Create a checkpoint before updating
-    console.log('[check-point] updateCycle start')
     const checkpointData = new CycleCheckpointData(cycle)
     const bucketID = calculateBucketID(cycle)
     cycleCheckpointManager.addData(checkpointData, bucketID)
-    console.log('[check-point] updateCycle end')
     const sql = `UPDATE cycles SET counter = $counter, cycleRecord = $cycleRecord WHERE cycleMarker = $marker `
     await db.run(cycleDatabase, sql, {
       $counter: cycle.counter,
@@ -199,27 +190,4 @@ export async function queryCyleCount(): Promise<number> {
   if (cycles) cycles = cycles['COUNT(*)']
   else cycles = 0
   return cycles
-}
-
-export async function queryCycleByBucketId(bucketId: string): Promise<Cycle[]> {
-  try {
-    console.log('[check-point] queryCycleByBucketId start')
-    // Query cycles where first two chars of hashed counter match bucketId
-    const sql = `
-      SELECT * FROM cycles 
-      WHERE substr(lower(hex(hash(counter))), 1, 2) = ?
-      ORDER BY counter ASC
-    `
-    const dbCycles = (await db.all(cycleDatabase, sql, [bucketId])) as DbCycle[]
-    console.log('[check-point] queryCycleByBucketId end', dbCycles) 
-    return dbCycles.map(dbCycle => ({
-      counter: dbCycle.counter,
-      cycleRecord: DeSerializeFromJsonString(dbCycle.cycleRecord),
-      cycleMarker: dbCycle.cycleMarker,
-    }))
-  } catch (e) {
-    console.error('[check-point] queryCycleByBucketId error', e)
-    Logger.mainLogger.error('[queryCycleByBucketId]', e)
-    return []
-  }
 }
