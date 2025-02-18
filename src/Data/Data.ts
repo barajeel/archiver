@@ -191,17 +191,17 @@ export async function unsubscribeDataSender(
 
 export function initSocketClient(node: NodeList.ConsensusNodeInfo): void {
   if (config.VERBOSE) Logger.mainLogger.debug('Node Info to socket connect', node)
-  
+
   try {
     const socketClient = ioclient.connect(`http://${node.ip}:${node.port}`, {
       query: {
         data: JSON.stringify(
-        Crypto.sign({
-          publicKey: State.getNodeInfo().publicKey, 
-          timestamp: Date.now(),
-          intendedConsensor: node.publicKey
-       })
-      ),
+          Crypto.sign({
+            publicKey: State.getNodeInfo().publicKey,
+            timestamp: Date.now(),
+            intendedConsensor: node.publicKey
+          })
+        ),
       },
     })
     socketClients.set(node.publicKey, socketClient)
@@ -315,7 +315,7 @@ export function initSocketClient(node: NodeList.ConsensusNodeInfo): void {
           } else {
             if (storingAccountData) {
               Logger.mainLogger.debug('Storing Account Data')
-              let newCombineAccountsData = {...combineAccountsData}
+              let newCombineAccountsData = { ...combineAccountsData }
               if (newData.responses.ACCOUNT.accounts)
                 newCombineAccountsData.accounts = [
                   ...newCombineAccountsData.accounts,
@@ -326,7 +326,7 @@ export function initSocketClient(node: NodeList.ConsensusNodeInfo): void {
                   ...newCombineAccountsData.receipts,
                   ...newData.responses.ACCOUNT.receipts,
                 ]
-              combineAccountsData = {...newCombineAccountsData}
+              combineAccountsData = { ...newCombineAccountsData }
               newCombineAccountsData = {
                 accounts: [],
                 receipts: [],
@@ -387,11 +387,11 @@ export function collectCycleData(
     }
     if (config.VERBOSE)
       Logger.mainLogger.debug('Cycle received', cycle.counter, receivedCycleTracker[cycle.counter])
-    
-    const minCycleConfirmations = 
-    Math.min(Math.ceil(NodeList.getActiveNodeCount() / currentConsensusRadius), 5) || 
-    (cycle.counter <= 15 ? 1 : 3);
-    
+
+    const minCycleConfirmations =
+      Math.min(Math.ceil(NodeList.getActiveNodeCount() / currentConsensusRadius), 5) ||
+      (cycle.counter <= 15 ? 1 : 3);
+
 
     for (const value of Object.values(receivedCycleTracker[cycle.counter])) {
       if (value['saved']) {
@@ -1259,7 +1259,7 @@ export async function syncCyclesAndNodeList(lastStoredCycleCount = 0): Promise<v
   const cycleToSyncTo = await getNewestCycleFromArchivers()
   Logger.mainLogger.debug('cycleToSyncTo', cycleToSyncTo)
   Logger.mainLogger.debug(`Syncing till cycle ${cycleToSyncTo.counter}...`)
-  
+
   const cyclesToGet = 2 * Math.floor(Math.sqrt(cycleToSyncTo.active)) + 2
   Logger.mainLogger.debug(`Cycles to get is ${cyclesToGet}`)
 
@@ -1496,13 +1496,15 @@ export async function syncReceiptsByCycle(lastStoredReceiptCycle = 0, cycleToSyn
     totalCycles = response.totalCycles
     totalReceipts = response.totalReceipts
   }
-  const complete = false
   let startCycle = lastStoredReceiptCycle
   let endCycle = startCycle + MAX_BETWEEN_CYCLES_PER_REQUEST
   let receiptsCountToSyncBetweenCycles = 0
   let savedReceiptsCountBetweenCycles = 0
   let totalSavedReceiptsCount = 0
-  while (!complete) {
+  let retryCount = 0
+  const MAX_RETRIES = 3
+
+  while (true) {
     if (endCycle > totalCycles) {
       endCycle = totalCycles
       totalSavedReceiptsCount = await ReceiptDB.queryReceiptCount()
@@ -1510,7 +1512,7 @@ export async function syncReceiptsByCycle(lastStoredReceiptCycle = 0, cycleToSyn
     if (cycleToSyncTo > 0) {
       if (startCycle > cycleToSyncTo) {
         Logger.mainLogger.debug(`Sync receipts data completed!`)
-        break
+        return true
       }
     } else {
       if (totalSavedReceiptsCount >= totalReceipts) {
@@ -1526,7 +1528,7 @@ export async function syncReceiptsByCycle(lastStoredReceiptCycle = 0, cycleToSyn
           )
           if (totalSavedReceiptsCount === totalReceipts) {
             Logger.mainLogger.debug('Sync receipts data completed!')
-            break
+            return true
           }
         }
       }
@@ -1535,7 +1537,7 @@ export async function syncReceiptsByCycle(lastStoredReceiptCycle = 0, cycleToSyn
       Logger.mainLogger.error(
         `Got some issues in syncing receipts. Receipts query startCycle ${startCycle} is greater than endCycle ${endCycle}`
       )
-      break
+      return false
     }
     Logger.mainLogger.debug(`Downloading receipts from cycle ${startCycle} to cycle ${endCycle}`)
     let response = (await queryFromArchivers(
@@ -1595,26 +1597,38 @@ export async function syncReceiptsByCycle(lastStoredReceiptCycle = 0, cycleToSyn
           }
           totalSavedReceiptsCount += downloadedReceipts.length
           page++
+          retryCount = 0
         } else {
           Logger.mainLogger.debug('Invalid download response')
+          retryCount++
+          if (retryCount >= MAX_RETRIES) {
+            Logger.mainLogger.error('Max retries reached for invalid download response')
+            return false
+          }
           continue
         }
       }
       Logger.mainLogger.debug(`Download receipts completed for ${startCycle} - ${endCycle}`)
       startCycle = endCycle + 1
       endCycle += MAX_BETWEEN_CYCLES_PER_REQUEST
+      retryCount = 0
     } else {
-      receiptsCountToSyncBetweenCycles = response.receipts
+      receiptsCountToSyncBetweenCycles = response ? response.receipts : 0
       if (receiptsCountToSyncBetweenCycles === 0) {
         startCycle = endCycle + 1
         endCycle += MAX_BETWEEN_CYCLES_PER_REQUEST
+        retryCount = 0
         continue
       }
       Logger.mainLogger.debug('Invalid download response')
+      retryCount++
+      if (retryCount >= MAX_RETRIES) {
+        Logger.mainLogger.error('Max retries reached for invalid download response')
+        return false
+      }
       continue
     }
   }
-  return false
 }
 
 export const syncOriginalTxs = async (): Promise<void> => {
@@ -2129,44 +2143,49 @@ export async function compareWithOldReceiptsData(lastStoredReceiptCycle = 0): Pr
 }
 
 export async function compareWithOldCyclesData(lastCycleCounter = 0): Promise<CompareResponse> {
-  const numberOfCyclesTocompare = 10
-  const start = lastCycleCounter - numberOfCyclesTocompare
-  const end = lastCycleCounter
-  const response = (await queryFromArchivers(
-    RequestDataType.CYCLE,
-    {
-      start,
-      end,
-    },
-    QUERY_TIMEOUT_MAX
-  )) as ArchiverCycleResponse
-  if (!response && !response.cycleInfo) {
-    throw Error(`Can't fetch data from cycle ${start} to cycle ${end}  from archivers`)
-  }
-  const downloadedCycles = response.cycleInfo
-  const oldCycles = await CycleDB.queryCycleRecordsBetween(start, end)
-  let success = false
-  let matchedCycle = 0
-  for (let i = 0; i < downloadedCycles.length; i++) {
-    // eslint-disable-next-line security/detect-object-injection
-    const downloadedCycle = downloadedCycles[i]
-    // eslint-disable-next-line security/detect-object-injection
-    const oldCycle = oldCycles[i]
-    if (
-      !downloadedCycle ||
-      !oldCycle ||
-      StringUtils.safeStringify(downloadedCycle) !== StringUtils.safeStringify(oldCycle)
-    ) {
-      console.log('Mismatched cycle Number', downloadedCycle.counter, oldCycle.counter)
-      return {
-        success,
-        matchedCycle,
-      }
+  try {
+    const numberOfCyclesTocompare = 10
+    const start = lastCycleCounter - numberOfCyclesTocompare
+    const end = lastCycleCounter
+    const response = (await queryFromArchivers(
+      RequestDataType.CYCLE,
+      {
+        start,
+        end,
+      },
+      QUERY_TIMEOUT_MAX
+    )) as ArchiverCycleResponse
+    if (!response && !response.cycleInfo) {
+      throw Error(`Can't fetch data from cycle ${start} to cycle ${end}  from archivers`)
     }
-    success = true
-    matchedCycle = downloadedCycle.counter
+    const downloadedCycles = response.cycleInfo
+    const oldCycles = await CycleDB.queryCycleRecordsBetween(start, end)
+    let success = false
+    let matchedCycle = 0
+    for (let i = 0; i < downloadedCycles.length; i++) {
+      // eslint-disable-next-line security/detect-object-injection
+      const downloadedCycle = downloadedCycles[i]
+      // eslint-disable-next-line security/detect-object-injection
+      const oldCycle = oldCycles[i]
+      if (
+        !downloadedCycle ||
+        !oldCycle ||
+        StringUtils.safeStringify(downloadedCycle) !== StringUtils.safeStringify(oldCycle)
+      ) {
+        console.log('Mismatched cycle Number', downloadedCycle.counter, oldCycle.counter)
+        return {
+          success,
+          matchedCycle,
+        }
+      }
+      success = true
+      matchedCycle = downloadedCycle.counter
+    }
+    return { success, matchedCycle }
+  } catch (error) {
+    Logger.mainLogger.error(error)
+    return { success: false, matchedCycle: 0 }
   }
-  return { success, matchedCycle }
 }
 
 async function downloadOldCycles(

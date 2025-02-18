@@ -7,7 +7,8 @@ import { verifyReceiptData } from '../Data/Collector'
 import { verifyAppReceiptData } from '../shardeum/verifyAppReceiptData'
 import { safeStringify } from '@shardeum-foundation/lib-types/build/src/utils/functions/stringify'
 import * as db from '../dbstore/sqlite3storage'
-import { checkpointDatabase } from '../dbstore'
+import { checkpointDatabase, receiptDatabase } from '../dbstore'
+import { SerializeToJsonString } from '../utils/serialization'
 
 export class ReceiptCheckpointData extends CheckpointData<ReceiptType | ArchiverReceipt> {
   constructor(receipt: ReceiptType | ArchiverReceipt) {
@@ -24,20 +25,23 @@ export class ReceiptCheckpointData extends CheckpointData<ReceiptType | Archiver
 }
 
 class ReceiptCheckpointManager extends CheckpointBucketManager<ReceiptType | ArchiverReceipt> {
-  private static instance: ReceiptCheckpointManager;
+  private static instance: ReceiptCheckpointManager
 
   private constructor() {
-    super({
-      validateData: ReceiptCheckpointManager.validateData,
-      updateData: ReceiptCheckpointManager.updateData,
-    }, CheckpointType.Receipt)
+    super(
+      {
+        validateData: ReceiptCheckpointManager.validateData,
+        updateData: ReceiptCheckpointManager.updateData,
+      },
+      CheckpointType.Receipt
+    )
   }
 
   public static getInstance(): ReceiptCheckpointManager {
     if (!ReceiptCheckpointManager.instance) {
-      ReceiptCheckpointManager.instance = new ReceiptCheckpointManager();
+      ReceiptCheckpointManager.instance = new ReceiptCheckpointManager()
     }
-    return ReceiptCheckpointManager.instance;
+    return ReceiptCheckpointManager.instance
   }
 
   // public addReceipt(receipt: ReceiptType | ArchiverReceipt): void {
@@ -62,36 +66,70 @@ class ReceiptCheckpointManager extends CheckpointBucketManager<ReceiptType | Arc
     }
   }
 
-  private static async updateData(data: CheckpointData<ReceiptType | ArchiverReceipt>): Promise<void> {
-    const { tx, signedReceipt, globalModification } = data.d
-    const sortedVoteOffsets = globalModification ? [] : (signedReceipt as SignedReceipt).voteOffsets.sort()
-    const medianOffset = sortedVoteOffsets[Math.floor(sortedVoteOffsets.length / 2)] ?? 0
-    const applyTimestamp = tx.timestamp + medianOffset * 1000
+  private static async updateData(data: CheckpointData<ReceiptType>): Promise<void> {
+    try {
+      // Insert/Update into checkpoint_data table
+      console.log('[check-point] updateData', data)
 
-    const sql = `
-      INSERT OR REPLACE INTO checkpoint_data (
-        address, timestamp, hash, class_type, bucket_id, data_json, processed, last_update
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `
-    const values = [
-      data.a,
-      data.t,
-      data.h,
-      2,
-      data.d.cycle,
-      safeStringify({
-        ...data.d,
-        receiptId: tx.txId,
-        timestamp: tx.timestamp,
+      const columns = [
+        'receiptId',
+        'tx',
+        'cycle',
+        'applyTimestamp',
+        'timestamp',
+        'signedReceipt',
+        'afterStates',
+        'beforeStates',
+        'appReceiptData',
+        'executionShardKey',
+        'globalModification',
+      ]
+      const receipt = data.d
+      const sql = `INSERT OR REPLACE INTO receipts (${columns.join(', ')}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      console.log('[my-log] receipt insert sql: ', sql)
+
+      // Calculate median offset for apply timestamp
+      const sortedVoteOffsets = receipt.globalModification
+        ? []
+        : (receipt.signedReceipt as SignedReceipt).voteOffsets.sort()
+      const medianOffset = sortedVoteOffsets[Math.floor(sortedVoteOffsets.length / 2)] ?? 0
+      const applyTimestamp = receipt.tx.timestamp + medianOffset * 1000
+
+      // Map the `receipt` object to match the columns
+      const values = [
+        receipt.receiptId,
+        typeof receipt.tx === 'object' ? SerializeToJsonString(receipt.tx) : receipt.tx,
+        receipt.cycle,
         applyTimestamp,
-      }),
-      false,
-      Math.floor(Date.now() / 1000),
-    ]
+        receipt.timestamp,
+        typeof receipt.signedReceipt === 'object'
+          ? SerializeToJsonString(receipt.signedReceipt)
+          : receipt.signedReceipt,
+        typeof receipt.afterStates === 'object'
+          ? SerializeToJsonString(receipt.afterStates)
+          : receipt.afterStates,
+        typeof receipt.beforeStates === 'object'
+          ? SerializeToJsonString(receipt.beforeStates)
+          : receipt.beforeStates,
+        typeof receipt.appReceiptData === 'object'
+          ? SerializeToJsonString(receipt.appReceiptData)
+          : receipt.appReceiptData,
+        receipt.executionShardKey,
+        receipt.globalModification,
+      ]
 
-    await db.run(checkpointDatabase, sql, values)
+      // Execute the query directly (single-row insert)
+      await db.run(receiptDatabase, sql, values)
+
+      console.log('[check-point] updateData stored checkpoint data', data.h)
+      Logger.mainLogger.debug('[CheckpointData] Stored checkpoint data:', data.h)
+    } catch (err) {
+      console.error('[check-point] updateData Failed to store checkpoint data:', err)
+      Logger.mainLogger.error('[CheckpointData] Failed to store checkpoint data:', err)
+      throw err
+    }
   }
 }
 
 // Export the singleton instance
-export const receiptCheckpointManager = ReceiptCheckpointManager.getInstance();
+export const receiptCheckpointManager = ReceiptCheckpointManager.getInstance()

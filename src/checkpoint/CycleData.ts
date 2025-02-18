@@ -87,7 +87,7 @@ export class CycleCheckpointBucket extends CheckpointBucket<Cycle> {
 
 //Manages all buckets, routes incoming data to the correct bucket, and does periodic updates
 class CycleCheckpointManager extends CheckpointBucketManager<Cycle> {
-  private static instance: CycleCheckpointManager;
+  private static instance: CycleCheckpointManager
 
   private constructor() {
     const persistenceCallbacks: DataPersistenceCallbacks<Cycle> = {
@@ -99,14 +99,14 @@ class CycleCheckpointManager extends CheckpointBucketManager<Cycle> {
 
   public static getInstance(): CycleCheckpointManager {
     if (!CycleCheckpointManager.instance) {
-      CycleCheckpointManager.instance = new CycleCheckpointManager();
+      CycleCheckpointManager.instance = new CycleCheckpointManager()
     }
-    return CycleCheckpointManager.instance;
+    return CycleCheckpointManager.instance
   }
 }
 
 // Export the singleton instance
-export const cycleCheckpointManager = CycleCheckpointManager.getInstance();
+export const cycleCheckpointManager = CycleCheckpointManager.getInstance()
 
 //Represents a tally of all radix entries in the system
 export class CycleRadixDigestTally extends RadixDigestTally {
@@ -141,7 +141,12 @@ async function validateData(data: CheckpointData<Cycle>): Promise<boolean> {
   }
 
   // Verify address matches hash of cycle counter
-  const expectedAddress = crypto.createHash('sha256').update(safeStringify(cycle)).digest('hex').toLowerCase().substring(0, 2)
+  const expectedAddress = crypto
+    .createHash('sha256')
+    .update(safeStringify(cycle))
+    .digest('hex')
+    .toLowerCase()
+    .substring(0, 2)
 
   if (data.a !== expectedAddress) {
     console.error('[check-point] validateData Address mismatch')
@@ -180,39 +185,23 @@ async function updateData(data: CheckpointData<Cycle>): Promise<void> {
   try {
     // Insert/Update into checkpoint_data table
     console.log('[check-point] updateData', data)
-    // const sql = `
-    //   INSERT OR REPLACE INTO checkpoint_data (
-    //     address, timestamp, hash, class_type, bucket_id, data_json, processed, last_update
-    //   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    // `
-    // const values = [
-    //   data.a, // address
-    //   data.t, // timestamp
-    //   data.h, // hash
-    //   0, // class_type (0 for cycle)
-    //   calculateBucketID(data.d), // bucket_id
-    //   safeStringify(data.d), // data_json
-    //   false, // processed
-    //   Math.floor(Date.now() / 1000), // last_update
-    // ]
-
-    // await db.run(checkpointDatabase, sql, values)
 
     const columns = ['cycleMarker', 'counter', 'cycleRecord']
-    const placeholders = columns.map(() => '?').join(', ')
     const cycle = data.d
-    const sql = `INSERT OR REPLACE INTO cycles (${columns.join(', ')}) VALUES ${placeholders}`;
+    const sql = `INSERT OR REPLACE INTO cycles (${columns.join(', ')}) VALUES (?, ?, ?)`
+    console.log('[my-log] cycle insert sql: ', sql)
 
     // Map the `cycle` object to match the columns
-    const values = columns.map((column) =>
-      typeof cycle[column] === 'object'
-        ? SerializeToJsonString(cycle[column]) // Serialize objects to JSON
-        : cycle[column]
-    );
+    const values = [
+      cycle.cycleMarker,
+      cycle.counter,
+      typeof cycle.cycleRecord === 'object'
+        ? SerializeToJsonString(cycle.cycleRecord) // Serialize objects to JSON
+        : cycle.cycleRecord,
+    ]
 
     // Execute the query directly (single-row insert)
-    await db.run(cycleDatabase, sql, values);
-
+    await db.run(cycleDatabase, sql, values)
 
     console.log('[check-point] updateData stored checkpoint data', data.h)
     Logger.mainLogger.debug('[CheckpointData] Stored checkpoint data:', data.h)

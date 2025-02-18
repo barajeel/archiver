@@ -91,27 +91,6 @@ async function start(): Promise<void> {
   // Initialize storage and checkpoints
   if (config.experimentalSnapshot) {
     await dbstore.initializeDB(config)
-    
-    // Initialize checkpoint system with null checks
-    const updateInterval = setInterval(() => {
-      if (cycleCheckpointManager && receiptCheckpointManager && originalTxCheckpointManager) {
-        console.log('[check-point] update checkpoint interval')
-        try {
-          cycleCheckpointManager.update()
-          receiptCheckpointManager.update()
-          originalTxCheckpointManager.update()
-        } catch (err) {
-          Logger.mainLogger.error('[check-point] Error updating checkpoints:', err)
-        }
-      } else {
-        Logger.mainLogger.error('[check-point] One or more checkpoint managers not initialized')
-      }
-    }, config.checkpointUpdateInterval)
-
-    // Clean up on process exit
-    process.on('SIGTERM', () => {
-      clearInterval(updateInterval)
-    })
   } else {
     await Storage.initStorage(config)
   }
@@ -203,14 +182,34 @@ async function start(): Promise<void> {
       await startServer()
     }
   } else {
-    Logger.mainLogger.debug('We are not first archiver. Syncing and starting archive-server')
-    syncAndStartServer()
+    try {
+      Logger.mainLogger.debug('We are not first archiver. Syncing and starting archive-server')
+      syncAndStartServer()
+    } catch (err) {
+      Logger.mainLogger.error('Error syncing and starting archive-server', err)
+    }
   }
 
   setTimeout(() => {
     scheduleMultiSigKeysSyncFromNetConfig();
   }, 60 * 1000); // Start after 60 seconds
 
+
+  // Initialize checkpoint system with null checks
+  setInterval(() => {
+    if (cycleCheckpointManager && receiptCheckpointManager && originalTxCheckpointManager) {
+      console.log('[check-point] update checkpoint interval')
+      try {
+        cycleCheckpointManager.update()
+        receiptCheckpointManager.update()
+        originalTxCheckpointManager.update()
+      } catch (err) {
+        Logger.mainLogger.error('[check-point] Error updating checkpoints:', err)
+      }
+    } else {
+      Logger.mainLogger.error('[check-point] One or more checkpoint managers not initialized')
+    }
+  }, config.checkpointUpdateInterval)
 }
 
 function initProfiler(server: FastifyInstance): void {

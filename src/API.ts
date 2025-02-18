@@ -43,6 +43,7 @@ import { receiptCheckpointManager } from './checkpoint/ReceiptData'
 import { originalTxCheckpointManager } from './checkpoint/OriginalTxsData'
 import { CheckpointBucketManager, CheckpointRadixEntry } from './checkpoint/CheckpointData'
 import { CheckpointType } from './checkpoint/CheckpointData'
+import { safeJsonParse, safeStringify } from '@shardeum-foundation/lib-types/build/src/utils/functions/stringify'
 
 const { version } = require('../package.json') // eslint-disable-line @typescript-eslint/no-var-requires
 const TXID_LENGTH = 64
@@ -230,7 +231,7 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
       console.log('[check-point] get-checkpoints buckets', buckets)
       const checkpointData = Array.from(buckets.values()).map((bucket) => ({
         bucketId: bucket.bucketID,
-        data: { bucket },
+        data: bucket,
       }))
       console.log('[check-point] get-checkpoints checkpointData', checkpointData)
       reply.send(Crypto.sign({ checkpointData }))
@@ -1348,7 +1349,7 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
       console.log('[check-point] shareCheckpointRadixDigests bucket found', bucket)
 
       // Process received digests
-      manager.onHashDigestsReceived(senderAddress, bucketID, radixDigests)
+      manager.onHashDigestsReceived(senderAddress, bucketID, safeJsonParse(radixDigests))
 
       console.log('[check-point] shareCheckpointRadixDigests onHashDigestsReceived')
 

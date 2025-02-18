@@ -1094,7 +1094,7 @@ export const storeReceiptData = async (
       timestamp: tx.timestamp,
       applyTimestamp,
     }
-    const receiptCheckpointData = new ReceiptCheckpointData(receipt as Receipt.Receipt | Receipt.ArchiverReceipt)
+    const receiptCheckpointData = new ReceiptCheckpointData(receipt as Receipt.Receipt)
     // Add to checkpoint system
     receiptCheckpointManager.addData(receiptCheckpointData, receipt.cycle.toString())
     

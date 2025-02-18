@@ -13,6 +13,7 @@ import { OriginalTxData } from '../dbstore/originalTxsData'
 import { safeStringify } from '@shardeum-foundation/lib-types/build/src/utils/functions/stringify'
 import { checkpointDatabase, originalTxDataDatabase } from '../dbstore'
 import * as Logger from '../Logger'
+import { SerializeToJsonString } from '../utils/serialization'
 
 export class OriginalTxCheckpointData extends CheckpointData<OriginalTxData> {
   constructor(data: OriginalTxData) {
@@ -81,19 +82,25 @@ async function updateData(data: CheckpointData<OriginalTxData>): Promise<void> {
   try {
     // Insert/Update into originalTxsData table
     console.log('[check-point] updateData originalTx', data)
-    const values = [
-      data.d.txId, // txId
-      data.t, // timestamp
-      data.d.cycle, // cycle
-      safeStringify(data.d.originalTxData), // originalTxData
-    ]
 
     const columns = ['txId', 'timestamp', 'cycle', 'originalTxData']
+    const originalTx = data.d
+    const sql = `INSERT OR REPLACE INTO originalTxsData (${columns.join(', ')}) VALUES (?, ?, ?, ?)`
+    console.log('[my-log] originalTx insert sql: ', sql)
 
-    const placeholders = columns.map(() => '?').join(', ')
-    const sql = `INSERT OR REPLACE INTO originalTxsData (${columns.join(', ')}) VALUES (${placeholders})`
+    // Map the `originalTx` object to match the columns
+    const values = [
+      originalTx.txId,
+      data.t,
+      originalTx.cycle,
+      typeof originalTx.originalTxData === 'object'
+        ? SerializeToJsonString(originalTx.originalTxData) // Serialize objects to JSON
+        : originalTx.originalTxData,
+    ]
 
+    // Execute the query directly (single-row insert)
     await db.run(originalTxDataDatabase, sql, values)
+
     console.log('[check-point] updateData stored originalTx checkpoint data', data.h)
     Logger.mainLogger.debug('[CheckpointData] Stored originalTx checkpoint data:', data.h)
   } catch (err) {

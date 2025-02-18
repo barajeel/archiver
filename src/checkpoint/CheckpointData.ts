@@ -106,7 +106,10 @@ export class CheckpointBucketManager<T> {
   updateData: (data: CheckpointData<T>) => Promise<void>
   checkpointType: CheckpointType
 
-  constructor(private persistenceCallbacks: DataPersistenceCallbacks<T>, checkpointType: CheckpointType) {
+  constructor(
+    private persistenceCallbacks: DataPersistenceCallbacks<T>,
+    checkpointType: CheckpointType
+  ) {
     this.checkpointBuckets = new Map<string, CheckpointBucket<T>>()
     this.validateData = persistenceCallbacks.validateData
     this.updateData = persistenceCallbacks.updateData
@@ -120,7 +123,14 @@ export class CheckpointBucketManager<T> {
       console.log('[check-point] CheckpointBucketManager addData creating new bucket')
       const startTime = Math.floor(data.t)
       const endTime = startTime + 60 // for 1 minute buckets
-      bucket = new CheckpointBucket<T>(startTime, endTime, bucketID, this.validateData, this.updateData, this.checkpointType)
+      bucket = new CheckpointBucket<T>(
+        startTime,
+        endTime,
+        bucketID,
+        this.validateData,
+        this.updateData,
+        this.checkpointType
+      )
       this.checkpointBuckets.set(bucketID, bucket) // adding an entry that maps the CheckpointType object to its contents, the key here is the address
     }
     console.log('[check-point] CheckpointBucketManager addData adding data to bucket')
@@ -130,31 +140,31 @@ export class CheckpointBucketManager<T> {
 
   // Periodically update all buckets to indicate the lifetime of the bucket since inserting into local memory
   async update(): Promise<void> {
-    // update the naming convention here to indicate time change and not data updation
-    console.log('[check-point] CheckpointBucketManager update')
-    const currentTime = Math.floor(Date.now() / 1000)
-    const toRemove: string[] = []
-    for (const [id, bucket] of this.checkpointBuckets.entries()) {
-      if (!bucket) {
-        continue
-      }
-
-      const age = currentTime - bucket.startTime
-      if (age > bucket.GiveUpAge) {
-        // We consider this bucket "failed" or "too old" => persist & alert
-        console.log(
-          `[CheckpointBucketManager] Bucket ${bucket.bucketID} exceeded GiveUpAge. Persisting & removing.`
-        )
-        // TODO : persist and alert
-        if (bucket.hasUpdatesToShare) {
-          bucket.writeToFileAndAlert()
-        } else {
+    try {
+      // update the naming convention here to indicate time change and not data updation
+      console.log('[check-point] CheckpointBucketManager update')
+      const currentTime = Math.floor(Date.now() / 1000)
+      const toRemove: string[] = []
+      for (const [id, bucket] of this.checkpointBuckets.entries()) {
+        if (!bucket) {
+          continue
+        }
+        if (currentTime > bucket.GiveUpAge) {
+          // We consider this bucket "failed" or "too old" => persist & alert
           console.log(
-            '[check-point] CheckpointBucketManager is older than giveUpAge and has no updates to share',
-            bucket.bucketID
+            `[CheckpointBucketManager] Bucket ${bucket.bucketID} exceeded GiveUpAge. Persisting & removing.`
           )
+          // TODO : persist and alert
+          if (bucket.hasUpdatesToShare) {
+            console.log('[my-log] CheckpointBucketManager update writeToFileAndAlert')
+            bucket.writeToFileAndAlert()
+          } else {
+            console.log(
+              '[check-point] CheckpointBucketManager is older than giveUpAge and has no updates to share',
+              bucket.bucketID
+            )
 
-          if (bucket.updateData) {
+            // Persist data to local storage
             const promises: Promise<void>[] = []
             for (const entry of bucket.radixEntries.values()) {
               for (const dataItem of entry.sortedData) {
@@ -163,21 +173,23 @@ export class CheckpointBucketManager<T> {
             }
             await Promise.all(promises)
           }
+          toRemove.push(id)
+        } else {
+          // Let the bucket do its normal update
+          bucket.update(currentTime)
         }
-        toRemove.push(id)
-      } else {
-        // Let the bucket do its normal update
-        bucket.update(currentTime)
       }
-    }
 
-    // Remove the stale buckets
-    for (const id of toRemove) {
-      this.checkpointBuckets.delete(id)
+      // Remove the stale buckets
+      for (const id of toRemove) {
+        this.checkpointBuckets.delete(id)
+      }
+      console.log('[check-point] CheckpointBucketManager update end')
+    } catch (err) {
+      console.error('[my-log] CheckpointBucketManager update failed', err)
+      Logger.mainLogger.error('Error in update:', err)
     }
-    console.log('[check-point] CheckpointBucketManager update end')
   }
-
   onHashDigestsReceived(
     // receives metadata about the radix information for a particular class type, recieves only radix prefix, count of data and hash, doesnt recieve actual payload
     senderAddress: string,
@@ -302,8 +314,13 @@ export class CheckpointBucket<T> {
     }
 
     console.log('[check-point] CheckpointBucket addData adding data to CheckpointRadixEntry')
+    console.log('[check-point] CheckpointBucket addData data radix', radix)
+
     // Add data to memory
     entry.sortedData.push(data)
+
+    // Update digest and mark for sharing
+    entry.updateDigest()
     this.hasUpdatesToShare = true
 
     // // Persist to storage via callback
@@ -363,10 +380,11 @@ export class CheckpointBucket<T> {
     // Send digests to all peers
     const sharePromises = peers.map((peerAddress) =>
       postJson(`http://${peerAddress}/shareCheckpointRadixDigests`, {
+        //Add verification to this endpoint
         senderAddress: `${config.ARCHIVER_IP}:${config.ARCHIVER_PORT}`,
         bucketID: this.bucketID,
-        radixDigests: digests,
-        checkpointType: this.checkpointType
+        radixDigests: safeStringify(digests),
+        checkpointType: this.checkpointType,
       }).catch((err) => {
         console.error(
           '[check-point] CheckpointBucket shareRadixDigests failed to share digests with peer',
@@ -529,7 +547,7 @@ export class CheckpointBucket<T> {
       const response: any = await postJson(`http://${peerAddress}/exchangeCheckpointRadixEntries`, {
         bucketID: this.bucketID,
         entries: [localEntry],
-        checkpointType: this.checkpointType
+        checkpointType: this.checkpointType,
       })
 
       if (!response?.entries) {
@@ -572,62 +590,73 @@ export class CheckpointBucket<T> {
     bucketID: string,
     radixDigests: CheckpointRadixDigest[]
   ): void {
-    console.log('[check-point] CheckpointBucket onHashDigestsReceived', senderAddress, bucketID, radixDigests)
-    if (bucketID !== this.bucketID) {
-      console.error(
-        '[check-point] CheckpointBucket onHashDigestsReceived bucket mismatch',
+    try {
+      console.log(
+        '[check-point] CheckpointBucket onHashDigestsReceived',
+        senderAddress,
         bucketID,
-        this.bucketID
+        radixDigests
       )
-      Logger.mainLogger.debug(
-        `[CheckpointBucket] onHashDigestsReceived: bucket mismatch, ignoring. Got ${bucketID}, expected ${this.bucketID}`
-      )
-      return
-    }
+      if (bucketID !== this.bucketID) {
+        console.error(
+          '[check-point] CheckpointBucket onHashDigestsReceived bucket mismatch',
+          bucketID,
+          this.bucketID
+        )
+        Logger.mainLogger.debug(
+          `[CheckpointBucket] onHashDigestsReceived: bucket mismatch, ignoring. Got ${bucketID}, expected ${this.bucketID}`
+        )
+        return
+      }
 
-    console.log('[check-point] CheckpointBucket onHashDigestsReceived iterating over radixDigests')
-    // TODO : might need rework
-    for (const digest of radixDigests) {
-      let tally = this.peerRadixDigests.get(digest.radix)
-      if (!tally) {
-        tally = new RadixDigestTally(digest.radix)
-        this.peerRadixDigests.set(digest.radix, tally)
+      console.log('[check-point] CheckpointBucket onHashDigestsReceived iterating over radixDigests')
+      // TODO : might need rework
+      for (const digest of radixDigests) {
+        let tally = this.peerRadixDigests.get(digest.radix)
+        console.log('[my-log] CheckpointBucket onHashDigestsReceived tally', tally)
+        if (!tally) {
+          tally = new RadixDigestTally(digest.radix)
+          this.peerRadixDigests.set(digest.radix, tally)
 
-        // Add our own entry to the tally if we have one
+          // Add our own entry to the tally if we have one
+          const ourEntry = this.radixEntries.get(digest.radix)
+          if (ourEntry) {
+            // Initialize tally with our hash counted as 1
+            tally.hashTally.set(ourEntry.digest.hash, 1) // TODO : might need rework on how the tally is incremented, might need to move it to the constructor
+          }
+        }
+
+        // Get previous digest from this peer if it exists
+        const previousDigest = tally.peerDigests.get(senderAddress) // this maps every archiver to a particular digest for the respective Checkpoint Bucket
+
+        // If peer had a different hash before, decrement its count
+        if (previousDigest && previousDigest.hash !== digest.hash) {
+          const oldCount = tally.hashTally.get(previousDigest.hash) || 0
+          if (oldCount > 0) {
+            tally.hashTally.set(previousDigest.hash, oldCount - 1)
+          }
+        }
+
+        // Update peer's digest
+        tally.peerDigests.set(senderAddress, digest)
+
+        // Update hash tally (our vote is already counted)
+        const currentCount = tally.hashTally.get(digest.hash) || 0
+        tally.hashTally.set(digest.hash, currentCount + 1)
+
+        // Compare with our entry
         const ourEntry = this.radixEntries.get(digest.radix)
-        if (ourEntry) {
-          // Initialize tally with our hash counted as 1
-          tally.hashTally.set(ourEntry.digest.hash, 1) // TODO : might need rework on how the tally is incremented, might need to move it to the constructor
+        if (ourEntry && ourEntry.digest.hash !== digest.hash) {
+          this.hasUpdatesToShare = true
         }
       }
 
-      // Get previous digest from this peer if it exists
-      const previousDigest = tally.peerDigests.get(senderAddress) // this maps every archiver to a particular digest for the respective Checkpoint Bucket
-
-      // If peer had a different hash before, decrement its count
-      if (previousDigest && previousDigest.hash !== digest.hash) {
-        const oldCount = tally.hashTally.get(previousDigest.hash) || 0
-        if (oldCount > 0) {
-          tally.hashTally.set(previousDigest.hash, oldCount - 1)
-        }
-      }
-
-      // Update peer's digest
-      tally.peerDigests.set(senderAddress, digest)
-
-      // Update hash tally (our vote is already counted)
-      const currentCount = tally.hashTally.get(digest.hash) || 0
-      tally.hashTally.set(digest.hash, currentCount + 1)
-
-      // Compare with our entry
-      const ourEntry = this.radixEntries.get(digest.radix)
-      if (ourEntry && ourEntry.digest.hash !== digest.hash) {
-        this.hasUpdatesToShare = true
-      }
+      this.receivedDigestCount++
+      console.log('[check-point] CheckpointBucket onHashDigestsReceived end')
+    } catch (err) {
+      console.error('[my-log] CheckpointBucket onHashDigestsReceived failed', err)
+      Logger.mainLogger.error('Error in onHashDigestsReceived:', err)
     }
-
-    this.receivedDigestCount++
-    console.log('[check-point] CheckpointBucket onHashDigestsReceived end')
   }
 
   /**
@@ -635,85 +664,114 @@ export class CheckpointBucket<T> {
    * We compare and merge.
    */
   onExchangeRadixEntries(bucketID: string, entries: CheckpointRadixEntry<T>[]): void {
-    console.log('[check-point] CheckpointBucket onExchangeRadixEntries', bucketID, entries)
-    if (bucketID !== this.bucketID) {
-      Logger.mainLogger.debug(
-        `[CheckpointBucket] onExchangeRadixEntries: bucket mismatch, ignoring. Got ${bucketID}, expected ${this.bucketID}`
-      )
-      return
-    }
-
-    console.log('[check-point] CheckpointBucket onExchangeRadixEntries iterating over entries')
-    const updatedRadixes: string[] = []
-
-    console.log('[check-point] CheckpointBucket onExchangeRadixEntries iterating over entries')
-    for (const incomingEntry of entries) {
-      let localEntry = this.radixEntries.get(incomingEntry.digest.radix)
-      if (!localEntry) {
-        console.error(
-          '[check-point] CheckpointBucket onExchangeRadixEntries localEntry not found',
-          incomingEntry
+    try {
+      console.log('[check-point] CheckpointBucket onExchangeRadixEntries', bucketID, entries)
+      if (bucketID !== this.bucketID) {
+        Logger.mainLogger.debug(
+          `[CheckpointBucket] onExchangeRadixEntries: bucket mismatch, ignoring. Got ${bucketID}, expected ${this.bucketID}`
         )
-        continue
+        return
       }
 
-      const previousHash = localEntry.digest.hash
-      let entryUpdated = false
+      console.log('[check-point] CheckpointBucket onExchangeRadixEntries iterating over entries')
+      const updatedRadixes: string[] = []
 
-      // Merge incoming data
-      for (const data of incomingEntry.sortedData) {
-        if (!localEntry.sortedData.find((d) => d.h === data.h)) {
-          if (this.validateData && !this.validateData(data)) {
-            Logger.mainLogger.error('[CheckpointBucket] Validation failed for data:', data)
-            continue
-          }
-
-          console.log('[check-point] CheckpointBucket onExchangeRadixEntries adding data to localEntry')
-          localEntry.sortedData.push(data)
-          entryUpdated = true
-          console.log('[check-point] CheckpointBucket onExchangeRadixEntries end')
-
-          if (this.updateData) {
-            this.updateData(data).catch((err) => {
-              Logger.mainLogger.error('[CheckpointBucket] Failed to persist data:', err)
-            })
-          }
+      console.log('[check-point] CheckpointBucket onExchangeRadixEntries iterating over entries')
+      for (const incomingEntry of entries) {
+        let localEntry = this.radixEntries.get(incomingEntry.digest.radix)
+        if (!localEntry) {
+          console.error(
+            '[check-point] CheckpointBucket onExchangeRadixEntries localEntry not found',
+            incomingEntry
+          )
+          continue
         }
-      }
 
-      if (entryUpdated) {
-        console.log('[check-point] CheckpointBucket onExchangeRadixEntries updating digest')
-        // Update our digest
-        localEntry.updateDigest()
-        console.log('[check-point] CheckpointBucket onExchangeRadixEntries end')
+        const previousHash = localEntry.digest.hash
+        let entryUpdated = false
 
-        // If hash changed, update tally
-        if (previousHash !== localEntry.digest.hash) {
-          const tally = this.peerRadixDigests.get(incomingEntry.digest.radix)
-          if (tally) {
-            // Decrement old hash count (including our previous vote)
-            const oldCount = tally.hashTally.get(previousHash) || 1 // At least 1 for our vote
-            if (oldCount > 1) {
-              tally.hashTally.set(previousHash, oldCount - 1)
-            } else {
-              tally.hashTally.delete(previousHash) // Remove if it was just our vote
+        // Merge incoming data
+        for (const data of incomingEntry.sortedData) {
+          if (!localEntry.sortedData.find((d) => d.h === data.h)) {
+            if (this.validateData && !this.validateData(data)) {
+              Logger.mainLogger.error('[CheckpointBucket] Validation failed for data:', data)
+              continue
             }
 
-            // Add our new hash with count of 1 (our vote)
-            tally.hashTally.set(localEntry.digest.hash, 1)
+            console.log('[check-point] CheckpointBucket onExchangeRadixEntries adding data to localEntry')
+            localEntry.sortedData.push(data)
+            entryUpdated = true
+            console.log('[check-point] CheckpointBucket onExchangeRadixEntries end')
+
+            if (this.updateData) {
+              this.updateData(data).catch((err) => {
+                Logger.mainLogger.error('[CheckpointBucket] Failed to persist data:', err)
+              })
+            }
           }
-          updatedRadixes.push(incomingEntry.digest.radix)
+        }
+
+        if (entryUpdated) {
+          console.log('[check-point] CheckpointBucket onExchangeRadixEntries updating digest')
+          // Update our digest
+          localEntry.updateDigest()
+          console.log('[check-point] CheckpointBucket onExchangeRadixEntries end')
+
+          // If hash changed, update tally
+          if (previousHash !== localEntry.digest.hash) {
+            const tally = this.peerRadixDigests.get(incomingEntry.digest.radix)
+            if (tally) {
+              // Decrement old hash count (including our previous vote)
+              const oldCount = tally.hashTally.get(previousHash) || 1 // At least 1 for our vote
+              if (oldCount > 1) {
+                tally.hashTally.set(previousHash, oldCount - 1)
+              } else {
+                tally.hashTally.delete(previousHash) // Remove if it was just our vote
+              }
+
+              // Add our new hash with count of 1 (our vote)
+              tally.hashTally.set(localEntry.digest.hash, 1)
+            }
+            updatedRadixes.push(incomingEntry.digest.radix)
+          }
         }
       }
-    }
 
-    console.log('[check-point] CheckpointBucket onExchangeRadixEntries updatedRadixes', updatedRadixes)
-    // If we updated anything, share our new digests
-    if (updatedRadixes.length > 0) {
-      this.hasUpdatesToShare = true
-      this.shareRadixDigests(updatedRadixes)
+      console.log('[check-point] CheckpointBucket onExchangeRadixEntries updatedRadixes', updatedRadixes)
+      // If we updated anything, share our new digests
+      if (updatedRadixes.length > 0) {
+        this.hasUpdatesToShare = true
+        this.shareRadixDigests(updatedRadixes)
+      }
+      console.log('[check-point] CheckpointBucket onExchangeRadixEntries end')
+    } catch (err) {
+      console.error('[my-log] CheckpointBucket onExchangeRadixEntries failed', err)
+      Logger.mainLogger.error('Error in onExchangeRadixEntries:', err)
     }
-    console.log('[check-point] CheckpointBucket onExchangeRadixEntries end')
+  }
+
+  toJSON() {
+    try {
+      return {
+        startTime: this.startTime,
+        endTime: this.endTime,
+        bucketID: this.bucketID,
+        checkpointType: this.checkpointType,
+        hasUpdatesToShare: this.hasUpdatesToShare,
+        sentDigestsCount: this.sentDigestsCount,
+        receivedDigestCount: this.receivedDigestCount,
+        lastProcessedDigestCount: this.lastProcessedDigestCount,
+        BucketMatureAge: this.BucketMatureAge,
+        GiveUpAge: this.GiveUpAge,
+        // Convert Maps to objects
+        radixEntries: Object.fromEntries(this.radixEntries),
+        peerRadixDigests: Object.fromEntries(this.peerRadixDigests),
+      }
+    } catch (err) {
+      console.error('[my-log] CheckpointBucket toJSON failed', err)
+      Logger.mainLogger.error('Error in toJSON:', err)
+      return null
+    }
   }
 }
 
