@@ -6,6 +6,7 @@ import {
   CheckpointRadixDigest,
   CheckpointBucket,
   CheckpointType,
+  DataPersistenceCallbacks,
 } from './CheckpointData'
 import * as crypto from 'crypto'
 import { OriginalTxData } from '../dbstore/originalTxsData'
@@ -13,6 +14,7 @@ import { safeStringify } from '@shardeum-foundation/lib-types/build/src/utils/fu
 import { originalTxDataDatabase } from '../dbstore'
 import * as Logger from '../Logger'
 import { SerializeToJsonString } from '../utils/serialization'
+import { validateOriginalTxDataSchema } from '../Data/Collector'
 
 export class OriginalTxCheckpointData extends CheckpointData<OriginalTxData> {
   constructor(data: OriginalTxData) {
@@ -28,12 +30,22 @@ export class OriginalTxCheckpointData extends CheckpointData<OriginalTxData> {
   }
 }
 
+export function calculateBucketID(originalTx: OriginalTxData): string {
+  if (!originalTx || originalTx.txId === undefined) {
+    Logger.mainLogger.error('Invalid originalTx data')
+    throw new Error('Invalid originalTx data')
+  }
+  return originalTx.cycle.toString()
+}
+
+//Represents a single radix entry in a bucket
 export class OriginalTxCheckpointRadixEntry extends CheckpointRadixEntry<OriginalTxData> {
   constructor(radix: string) {
     super(radix)
   }
 }
 
+//Represents a single radix entry in a bucket
 export class OriginalTxCheckpointRadixDigest extends CheckpointRadixDigest {
   constructor(radix: string, hash: string, itemCount: number) {
     super(radix, hash, itemCount)
@@ -50,19 +62,21 @@ export class OriginalTxCheckpointBucket extends CheckpointBucket<OriginalTxData>
   ) {
     super(startTime, endTime, bucketID, validateData, updateData, CheckpointType.OriginalTx)
   }
+  async update(currentTime: number): Promise<void> {
+    // Call parent update first
+    super.update(currentTime)
+  }
 }
 
 class OriginalTxCheckpointManager extends CheckpointBucketManager<OriginalTxData> {
   private static instance: OriginalTxCheckpointManager
 
   private constructor() {
-    super(
-      {
-        validateData,
-        updateData,
-      },
-      CheckpointType.OriginalTx
-    )
+    const persistenceCallbacks: DataPersistenceCallbacks<OriginalTxData> = {
+      validateData,
+      updateData,
+    }
+    super(persistenceCallbacks, CheckpointType.OriginalTx)
   }
 
   public static getInstance(): OriginalTxCheckpointManager {
@@ -94,6 +108,9 @@ async function updateData(data: CheckpointData<OriginalTxData>): Promise<void> {
         : originalTx.originalTxData,
     ]
 
+    console.log('writing originalTx', originalTx)
+    console.log('sql', sql)
+    console.log('values', values)
     // Execute the query directly (single-row insert)
     await db.run(originalTxDataDatabase, sql, values)
 
@@ -107,6 +124,5 @@ async function updateData(data: CheckpointData<OriginalTxData>): Promise<void> {
 // Define the validateData function
 async function validateData(data: CheckpointData<OriginalTxData>): Promise<boolean> {
   // Reuse existing validation logic
-  const { validateOriginalTxData } = require('../Data/Collector')
-  return validateOriginalTxData(data.d)
+  return validateOriginalTxDataSchema(data.d)
 }

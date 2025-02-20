@@ -224,11 +224,51 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
   })
 
   // for testing purposes only
-  server.get('/get-checkpoints', async (_request: any, reply) => {
+  server.get('/get-checkpoints-cycle', async (_request: any, reply) => {
     try {
-      console.log('[check-point] get-checkpoints')
+      console.log('[check-point] get-checkpoints-cycle')
       const buckets = cycleCheckpointManager.checkpointBuckets
-      console.log('[check-point] get-checkpoints buckets', buckets)
+      console.log('[check-point] get-checkpoints-cycle buckets', buckets)
+      const checkpointData = Array.from(buckets.values()).map((bucket) => ({
+        bucketId: bucket.bucketID,
+        data: bucket,
+      }))
+      console.log('[check-point] get-checkpoints-cycle checkpointData', checkpointData)
+      reply.send(Crypto.sign({ checkpointData }))
+    } catch (error) {
+      console.error('[check-point] get-checkpoints-cycle error', error)
+      Logger.mainLogger.error('Error in checkpoint GET endpoint for cycle:', error)
+      reply.send({
+        success: false,
+        error: 'Internal server error while retrieving checkpoint data for cycle',
+      })
+    }
+  })
+  server.get('/get-checkpoints-receipt', async (_request: any, reply) => {
+    try {
+      console.log('[check-point] get-checkpoints-receipt')
+      const buckets = receiptCheckpointManager.checkpointBuckets
+      console.log('[check-point] get-checkpoints-receipt buckets', buckets)
+      const checkpointData = Array.from(buckets.values()).map((bucket) => ({
+        bucketId: bucket.bucketID,
+        data: bucket,
+      }))
+      console.log('[check-point] get-checkpoints-receipt checkpointData', checkpointData)
+      reply.send(Crypto.sign({ checkpointData }))
+    } catch (error) {
+      console.error('[check-point] get-checkpoints-receipt error', error)
+      Logger.mainLogger.error('Error in checkpoint GET endpoint for receipt:', error)
+      reply.send({
+        success: false,
+        error: 'Internal server error while retrieving checkpoint data for receipt',
+      })
+    }
+  })
+  server.get('/get-checkpoints-original-tx', async (_request: any, reply) => {
+    try {
+      console.log('[check-point] get-checkpoints-original-tx')
+      const buckets = originalTxCheckpointManager.checkpointBuckets
+      console.log('[check-point] get-checkpoints-original-tx buckets', buckets)
       const checkpointData = Array.from(buckets.values()).map((bucket) => ({
         bucketId: bucket.bucketID,
         data: bucket,
@@ -236,11 +276,11 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
       console.log('[check-point] get-checkpoints checkpointData', checkpointData)
       reply.send(Crypto.sign({ checkpointData }))
     } catch (error) {
-      console.error('[check-point] get-checkpoints error', error)
-      Logger.mainLogger.error('Error in checkpoint GET endpoint:', error)
+      console.error('[check-point] get-checkpoints-original-tx error', error)
+      Logger.mainLogger.error('Error in checkpoint GET endpoint for original tx:', error)
       reply.send({
         success: false,
-        error: 'Internal server error while retrieving checkpoint data',
+        error: 'Internal server error while retrieving checkpoint data for original tx',
       })
     }
   })
@@ -940,8 +980,26 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
     const totalTransactions = await TransactionDB.queryTransactionCount()
     const totalReceipts = await ReceiptDB.queryReceiptCount()
     const totalOriginalTxs = await OriginalTxDB.queryOriginalTxDataCount()
+
+    // Get the last five minutes bucket status for each checkpoint manager
+    const cycleLastFiveMinutesGiveUpBucketStatus =
+      cycleCheckpointManager.getIsLastSucceededBucketTimeOlderThan5Mins()
+    const originalTxLastFiveMinutesGiveUpBucketStatus =
+      originalTxCheckpointManager.getIsLastSucceededBucketTimeOlderThan5Mins()
+    const receiptLastFiveMinutesGiveUpBucketStatus =
+      receiptCheckpointManager.getIsLastSucceededBucketTimeOlderThan5Mins()
+
     reply.send(
-      Crypto.sign({ totalCycles, totalAccounts, totalTransactions, totalReceipts, totalOriginalTxs })
+      Crypto.sign({
+        totalCycles,
+        totalAccounts,
+        totalTransactions,
+        totalReceipts,
+        totalOriginalTxs,
+        cycleLastFiveMinutesGiveUpBucketStatus,
+        originalTxLastFiveMinutesGiveUpBucketStatus,
+        receiptLastFiveMinutesGiveUpBucketStatus,
+      })
     )
   })
 
@@ -1323,9 +1381,10 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
   server.post('/shareCheckpointRadixDigests', async (req: any, reply) => {
     try {
       const { bucketID, radixDigests, senderAddress, checkpointType } = req.body
+      console.log(`[check-point] shareCheckpointRadixDigests request received from ${senderAddress} for bucket ${bucketID} and checkpoint type ${checkpointType}`)
       if (!bucketID || !radixDigests) {
-        Logger.mainLogger.error('Invalid payload')
-        reply.status(400).send('Invalid payload')
+        Logger.mainLogger.error(`Invalid payload in shareCheckpointRadixDigests request from ${senderAddress} for bucket ${bucketID} and checkpoint type ${checkpointType}`)
+        reply.status(400).send(`Invalid payload in shareCheckpointRadixDigests request from ${senderAddress} for bucket ${bucketID} and checkpoint type ${checkpointType}`)
         return
       }
 
@@ -1340,8 +1399,8 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
       }
       const bucket = manager.checkpointBuckets.get(bucketID)
       if (!bucket) {
-        Logger.mainLogger.error('No bucket found for ID=${bucketID}')
-        reply.status(404).send('Bucket not found')
+        Logger.mainLogger.error(`No bucket found for ID=${bucketID} for checkpoint type ${checkpointType}`)
+        reply.status(404).send(`Bucket not found for checkpoint type ${checkpointType}`)
         return
       }
 
@@ -1352,7 +1411,7 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
         status: 'ok',
       })
     } catch (err) {
-      Logger.mainLogger.error('Error in shareCheckpointRadixDigests:', err)
+      Logger.mainLogger.error(`Error in shareCheckpointRadixDigests for type ${req.body.checkpointType}:`, err)
       reply.status(500).send('Server error')
     }
   })
@@ -1360,9 +1419,10 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
   server.post('/exchangeCheckpointRadixEntries', async (req: any, reply) => {
     try {
       const { bucketID, entries, checkpointType } = req.body
+      console.log(`[check-point] exchangeCheckpointRadixEntries request received for bucket ${bucketID} and checkpoint type ${checkpointType}`)
       if (!bucketID || !entries) {
-        Logger.mainLogger.error('Invalid payload')
-        reply.status(400).send('Invalid payload')
+        Logger.mainLogger.error(`Invalid payload in exchangeCheckpointRadixEntries request for bucket ${bucketID} and checkpoint type ${checkpointType}`)
+        reply.status(400).send(`Invalid payload in exchangeCheckpointRadixEntries request for bucket ${bucketID} and checkpoint type ${checkpointType}`)
         return
       }
 
@@ -1376,8 +1436,8 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
       }
       const bucket = manager.checkpointBuckets.get(bucketID)
       if (!bucket) {
-        Logger.mainLogger.error(`No bucket found for ID=${bucketID}`)
-        reply.status(404).send('Bucket not found')
+        Logger.mainLogger.error(`No bucket found for ID=${bucketID} for checkpoint type ${checkpointType}`)
+        reply.status(404).send(`Bucket not found for checkpoint type ${checkpointType}`)
         return
       }
 
@@ -1404,8 +1464,8 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
       })
       reply.send(res)
     } catch (err) {
-      Logger.mainLogger.error('Error in exchangeCheckpointRadixEntries:', err)
-      reply.status(500).send('Server error')
+      Logger.mainLogger.error(`Error in exchangeCheckpointRadixEntries for type ${req.body.checkpointType}:`, err)
+      reply.status(500).send(`Server error in exchangeCheckpointRadixEntries for type ${req.body.checkpointType}`)
     }
   })
 }

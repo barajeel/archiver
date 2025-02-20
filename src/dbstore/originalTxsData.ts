@@ -5,7 +5,7 @@ import * as Logger from '../Logger'
 import { config } from '../Config'
 import { DeSerializeFromJsonString, SerializeToJsonString } from '../utils/serialization'
 import { originalTxCheckpointManager } from '../checkpoint/OriginalTxsData'
-import { OriginalTxCheckpointData } from '../checkpoint/OriginalTxsData'
+import { OriginalTxCheckpointData, calculateBucketID } from '../checkpoint/OriginalTxsData'
 
 export interface OriginalTxData {
   txId: string
@@ -35,7 +35,8 @@ export async function insertOriginalTxData(originalTxData: OriginalTxData): Prom
 
     //Create checkpoint for originalTxData
     const checkpointData = new OriginalTxCheckpointData(originalTxData)
-    originalTxCheckpointManager.addData(checkpointData, checkpointData.d.cycle.toString())
+    const bucketID = calculateBucketID(originalTxData)
+    originalTxCheckpointManager.addData(checkpointData, bucketID)
 
     // Define the table columns based on schema
     const columns = ['txId', 'timestamp', 'cycle', 'originalTxData'];
@@ -73,7 +74,8 @@ export async function bulkInsertOriginalTxsData(originalTxsData: OriginalTxData[
     // Create checkpoints for all originalTxs
     for (const originalTx of originalTxsData) {
       const checkpointData = new OriginalTxCheckpointData(originalTx)
-      originalTxCheckpointManager.addData(checkpointData, checkpointData.d.cycle.toString())
+      const bucketID = calculateBucketID(originalTx)
+      originalTxCheckpointManager.addData(checkpointData, bucketID)
     }
 
     // Then do the database operation

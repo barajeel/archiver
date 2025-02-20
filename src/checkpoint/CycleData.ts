@@ -32,7 +32,7 @@ export class CycleCheckpointData extends CheckpointData<Cycle> {
 }
 
 export function calculateBucketID(cycle: Cycle): string {
-  if (!cycle || !cycle.counter) {
+  if (!cycle || cycle.counter === undefined) {
     Logger.mainLogger.error('Invalid cycle data')
     throw new Error('Invalid cycle data')
   }
@@ -108,13 +108,13 @@ export class CycleRadixDigestTally extends RadixDigestTally {
 async function validateData(data: CheckpointData<Cycle>): Promise<boolean> {
   const cycle = data.d
   // Basic validation checks
-  if (!cycle || !cycle.counter || !cycle.cycleMarker || !cycle.cycleRecord) {
+  if (!cycle || (cycle.counter === undefined) || !cycle.cycleMarker || !cycle.cycleRecord) {
     Logger.mainLogger.error('Missing required cycle fields')
     return false
   }
 
   // Validate cycle record fields
-  if (!cycle.cycleRecord.start || !cycle.cycleRecord.counter) {
+  if (!cycle.cycleRecord.start || (cycle.cycleRecord.counter === undefined)) {
     Logger.mainLogger.error('Invalid cycle record fields')
     return false
   }

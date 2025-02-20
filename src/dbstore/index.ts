@@ -4,7 +4,6 @@ import { createDB, runCreate, close } from './sqlite3storage'
 import { createDirectories } from '../Utils'
 
 export let cycleDatabase: Database
-export let checkpointDatabase: Database
 export let accountDatabase: Database
 export let transactionDatabase: Database
 export let receiptDatabase: Database

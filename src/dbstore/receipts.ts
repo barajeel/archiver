@@ -7,8 +7,7 @@ import { config } from '../Config'
 import { DeSerializeFromJsonString , SerializeToJsonString} from '../utils/serialization'
 import { AccountsCopy } from '../dbstore/accounts'
 import { receiptCheckpointManager } from '../checkpoint/ReceiptData'
-import { ReceiptCheckpointData } from '../checkpoint/ReceiptData'
-
+import { ReceiptCheckpointData, calculateBucketID } from '../checkpoint/ReceiptData'
 // const superjson =  require('superjson')
 export type Proposal = {
   applied: boolean
@@ -113,7 +112,8 @@ export async function insertReceipt(receipt: Receipt): Promise<void> {
   try {
     // Create checkpoint for receipt
     const checkpointData = new ReceiptCheckpointData(receipt)
-    receiptCheckpointManager.addData(checkpointData, checkpointData.d.cycle.toString())
+    const bucketID = calculateBucketID(receipt)
+    receiptCheckpointManager.addData(checkpointData, bucketID)
 
     // Define the columns to match the database schema
     const columns = [
@@ -162,7 +162,8 @@ export async function bulkInsertReceipts(receipts: Receipt[]): Promise<void> {
     // Create checkpoints for all receipts
     for (const receipt of receipts) {
       const checkpointData = new ReceiptCheckpointData(receipt)
-      receiptCheckpointManager.addData(checkpointData, checkpointData.d.cycle.toString())
+      const bucketID = calculateBucketID(receipt)
+      receiptCheckpointManager.addData(checkpointData, bucketID)
     }
 
     // Define the table columns based on schema

@@ -1395,53 +1395,91 @@ export async function syncCyclesAndNodeListV2(
   return true
 }
 
-export async function syncCyclesBetweenCycles(lastStoredCycle = 0, cycleToSyncTo = 0): Promise<void> {
+export async function syncCyclesBetweenCycles(lastStoredCycle = 0, cycleToSyncTo = 0): Promise<boolean> {
+  const MAX_RETRIES = 3;
+  let retryCount = 0;
+  
   let startCycle = lastStoredCycle
   let endCycle = startCycle + MAX_CYCLES_PER_REQUEST
+  
   while (cycleToSyncTo > startCycle) {
     if (endCycle > cycleToSyncTo) endCycle = cycleToSyncTo
     Logger.mainLogger.debug(`Downloading cycles from ${startCycle} to ${endCycle}`)
-    const res = (await queryFromArchivers(
-      RequestDataType.CYCLE,
-      {
-        start: startCycle,
-        end: endCycle,
-      },
-      QUERY_TIMEOUT_MAX
-    )) as ArchiverCycleResponse
-    if (res && res.cycleInfo) {
-      const cycles = res.cycleInfo as P2PTypes.CycleCreatorTypes.CycleData[]
-      Logger.mainLogger.debug(`Downloaded cycles`, cycles.length)
-      for (const cycle of cycles) {
-        if (!validateCycleData(cycle)) {
-          Logger.mainLogger.debug('Found invalid cycle data')
-          continue
+    
+    let success = false
+    retryCount = 0
+
+    while (!success && retryCount < MAX_RETRIES) {
+      const res = await queryFromArchivers(
+        RequestDataType.CYCLE,
+        {
+          start: startCycle,
+          end: endCycle,
+        },
+        QUERY_TIMEOUT_MAX
+      ) as ArchiverCycleResponse
+
+      if (res && res.cycleInfo) {
+        const cycles = res.cycleInfo as P2PTypes.CycleCreatorTypes.CycleData[]
+        Logger.mainLogger.debug(`Downloaded cycles`, cycles.length)
+        
+        let validCyclesCount = 0
+        for (const cycle of cycles) {
+          if (!validateCycleData(cycle)) {
+            Logger.mainLogger.debug('Found invalid cycle data')
+            continue
+          }
+          await processCycles([cycle])
+          validCyclesCount++
         }
-        processCycles([cycle])
+        
+        success = true
+        
+        if (cycles.length < MAX_CYCLES_PER_REQUEST || validCyclesCount === 0) {
+          startCycle += Math.max(cycles.length, 1)
+          endCycle = startCycle + MAX_CYCLES_PER_REQUEST
+          if (startCycle >= cycleToSyncTo) {
+            Logger.mainLogger.debug('Sync cycles completed!')
+            return true
+          }
+          break
+        }
+      } else {
+        Logger.mainLogger.debug(`Invalid cycle download response, attempt ${retryCount + 1} of ${MAX_RETRIES}`)
+        retryCount++
+        if (retryCount >= MAX_RETRIES) {
+          Logger.mainLogger.error('Max retries reached for cycle download')
+          return false
+        }
+        continue
       }
-      if (res.cycleInfo.length < MAX_CYCLES_PER_REQUEST) {
-        startCycle += res.cycleInfo.length
-        endCycle = startCycle + MAX_CYCLES_PER_REQUEST
-        break
-      }
-    } else {
-      Logger.mainLogger.debug('Cycle', 'Invalid download response')
     }
-    startCycle = endCycle + 1
-    endCycle += MAX_CYCLES_PER_REQUEST
+
+    if (success) {
+      startCycle = endCycle + 1
+      endCycle += MAX_CYCLES_PER_REQUEST
+    }
   }
+  
+  return true
 }
 
 export async function syncReceipts(): Promise<void> {
+  const MAX_RETRIES = 3;
+  let retryCount = 0;
+  
   let response: ArchiverTotalDataResponse = await getTotalDataFromArchivers()
   if (!response || response.totalReceipts < 0) {
     return
   }
+  
   let { totalReceipts } = response
   if (totalReceipts < 1) return
+  
   let complete = false
   let start = 0
   let end = start + MAX_RECEIPTS_PER_REQUEST
+
   while (!complete) {
     if (end >= totalReceipts) {
       response = await getTotalDataFromArchivers()
@@ -1450,38 +1488,62 @@ export async function syncReceipts(): Promise<void> {
         Logger.mainLogger.debug('totalReceiptsToSync', totalReceipts)
       }
     }
-    Logger.mainLogger.debug(`Downloading receipts from ${start} to  ${end}`)
-    const res = (await queryFromArchivers(
-      RequestDataType.RECEIPT,
-      {
-        start: start,
-        end: end,
-      },
-      QUERY_TIMEOUT_MAX
-    )) as ArchiverReceiptResponse
-    if (res && res.receipts) {
-      const downloadedReceipts = res.receipts as ReceiptDB.Receipt[]
-      Logger.mainLogger.debug(`Downloaded receipts`, downloadedReceipts.length)
-      await storeReceiptData(downloadedReceipts)
-      if (downloadedReceipts.length < MAX_RECEIPTS_PER_REQUEST) {
-        start += downloadedReceipts.length
-        end = start + MAX_RECEIPTS_PER_REQUEST
-        response = await getTotalDataFromArchivers()
-        if (response && response.totalReceipts > 0) {
-          if (response.totalReceipts > totalReceipts) totalReceipts = response.totalReceipts
-          if (start === totalReceipts) {
-            complete = true
-            Logger.mainLogger.debug('Download receipts completed')
+
+    Logger.mainLogger.debug(`Downloading receipts from ${start} to ${end}`)
+    let success = false
+    retryCount = 0
+
+    while (!success && retryCount < MAX_RETRIES) {
+      const res = (await queryFromArchivers(
+        RequestDataType.RECEIPT,
+        {
+          start: start,
+          end: end,
+        },
+        QUERY_TIMEOUT_MAX
+      )) as ArchiverReceiptResponse
+
+      if (res && res.receipts) {
+        const downloadedReceipts = res.receipts as ReceiptDB.Receipt[]
+        Logger.mainLogger.debug(`Downloaded receipts`, downloadedReceipts.length)
+        await storeReceiptData(downloadedReceipts)
+        success = true
+
+        if (downloadedReceipts.length < MAX_RECEIPTS_PER_REQUEST) {
+          start += downloadedReceipts.length
+          end = start + MAX_RECEIPTS_PER_REQUEST
+          response = await getTotalDataFromArchivers()
+          if (response && response.totalReceipts > 0) {
+            if (response.totalReceipts > totalReceipts) totalReceipts = response.totalReceipts
+            if (start >= totalReceipts) {
+              complete = true
+              Logger.mainLogger.debug('Download receipts completed')
+            }
           }
-          continue
+          break
         }
+      } else {
+        Logger.mainLogger.debug(`Invalid download response, attempt ${retryCount + 1} of ${MAX_RETRIES}`)
+        retryCount++
+        if (retryCount >= MAX_RETRIES) {
+          Logger.mainLogger.error('Max retries reached for receipt download')
+          start = end + 1
+          end += MAX_RECEIPTS_PER_REQUEST
+          // Check if we've passed total receipts after incrementing
+          if (start >= totalReceipts) {
+            complete = true
+          }
+        }
+        continue
       }
-    } else {
-      Logger.mainLogger.debug('Invalid download response')
     }
-    start = end
-    end += MAX_RECEIPTS_PER_REQUEST
+
+    if (success) {
+      start = end + 1
+      end += MAX_RECEIPTS_PER_REQUEST
+    }
   }
+  
   Logger.mainLogger.debug('Sync receipts data completed!')
 }
 
@@ -1613,7 +1675,7 @@ export async function syncReceiptsByCycle(lastStoredReceiptCycle = 0, cycleToSyn
       endCycle += MAX_BETWEEN_CYCLES_PER_REQUEST
       retryCount = 0
     } else {
-      receiptsCountToSyncBetweenCycles = response ? response.receipts : 0
+      receiptsCountToSyncBetweenCycles = response.receipts
       if (receiptsCountToSyncBetweenCycles === 0) {
         startCycle = endCycle + 1
         endCycle += MAX_BETWEEN_CYCLES_PER_REQUEST
@@ -1632,12 +1694,21 @@ export async function syncReceiptsByCycle(lastStoredReceiptCycle = 0, cycleToSyn
 }
 
 export const syncOriginalTxs = async (): Promise<void> => {
+  const MAX_RETRIES = 3;
+  let retryCount = 0;
+  
   let response: ArchiverTotalDataResponse = await getTotalDataFromArchivers()
+  if (!response || response.totalOriginalTxs < 0) {
+    return
+  }
+  
   let { totalOriginalTxs } = response
   if (totalOriginalTxs < 1) return
+  
   let complete = false
   let start = 0
   let end = start + MAX_ORIGINAL_TXS_PER_REQUEST
+
   while (!complete) {
     if (end >= totalOriginalTxs) {
       // If the number of new original txs to sync is within MAX_ORIGINAL_TXS_PER_REQUEST => Update to the latest totalOriginalTxs.
@@ -1647,38 +1718,61 @@ export const syncOriginalTxs = async (): Promise<void> => {
         Logger.mainLogger.debug('totalOriginalTxs: ', totalOriginalTxs)
       }
     }
+
     Logger.mainLogger.debug(`Downloading Original-Txs from ${start} to ${end}`)
-    const res: any = await queryFromArchivers(
-      RequestDataType.ORIGINALTX,
-      {
-        start: start,
-        end: end,
-      },
-      QUERY_TIMEOUT_MAX
-    )
-    if (res && res.originalTxs) {
-      const downloadedOriginalTxs = res.originalTxs
-      Logger.mainLogger.debug('Downloaded Original-Txs: ', downloadedOriginalTxs.length)
-      await storeOriginalTxData(downloadedOriginalTxs)
-      if (downloadedOriginalTxs.length < MAX_ORIGINAL_TXS_PER_REQUEST) {
-        start += downloadedOriginalTxs.length
-        end = start + MAX_ORIGINAL_TXS_PER_REQUEST
-        response = await getTotalDataFromArchivers()
-        if (response && response.totalOriginalTxs > 0) {
-          if (response.totalOriginalTxs > totalOriginalTxs) totalOriginalTxs = response.totalOriginalTxs
-          if (start === totalOriginalTxs) {
-            complete = true
-            Logger.mainLogger.debug('Download Original-Txs Completed!')
+    let success = false
+    retryCount = 0
+
+    while (!success && retryCount < MAX_RETRIES) {
+      const res: any = await queryFromArchivers(
+        RequestDataType.ORIGINALTX,
+        {
+          start: start,
+          end: end,
+        },
+        QUERY_TIMEOUT_MAX
+      )
+
+      if (res && res.originalTxs) {
+        const downloadedOriginalTxs = res.originalTxs
+        Logger.mainLogger.debug('Downloaded Original-Txs: ', downloadedOriginalTxs.length)
+        await storeOriginalTxData(downloadedOriginalTxs)
+        success = true
+
+        if (downloadedOriginalTxs.length < MAX_ORIGINAL_TXS_PER_REQUEST) {
+          start += downloadedOriginalTxs.length
+          end = start + MAX_ORIGINAL_TXS_PER_REQUEST
+          response = await getTotalDataFromArchivers()
+          if (response && response.totalOriginalTxs > 0) {
+            if (response.totalOriginalTxs > totalOriginalTxs) totalOriginalTxs = response.totalOriginalTxs
+            if (start >= totalOriginalTxs) {
+              complete = true
+              Logger.mainLogger.debug('Download Original-Txs Completed!')
+            }
           }
-          continue
+          break
         }
+      } else {
+        Logger.mainLogger.debug(`Invalid Original-Tx download response, attempt ${retryCount + 1} of ${MAX_RETRIES}`)
+        retryCount++
+        if (retryCount >= MAX_RETRIES) {
+          Logger.mainLogger.error('Max retries reached for Original-Tx download')
+          start = end + 1
+          end += MAX_ORIGINAL_TXS_PER_REQUEST
+          if (start >= totalOriginalTxs) {
+            complete = true
+          }
+        }
+        continue
       }
-    } else {
-      Logger.mainLogger.debug('Invalid Original-Txs download response')
     }
-    start = end
-    end += MAX_ORIGINAL_TXS_PER_REQUEST
+
+    if (success) {
+      start = end + 1
+      end += MAX_ORIGINAL_TXS_PER_REQUEST
+    }
   }
+  
   Logger.mainLogger.debug('Sync Original-Txs Data Completed!')
 }
 

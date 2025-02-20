@@ -34,8 +34,6 @@ import { Utils as StringUtils } from '@shardeum-foundation/lib-types'
 import { verifyPayload } from '../types/ajv/Helpers'
 import { AJVSchemaEnum } from '../types/enum/AJVSchemaEnum'
 import {verifyTransaction} from "../services/transactionVerification";
-import { receiptCheckpointManager } from '../checkpoint/ReceiptData'
-import { ReceiptCheckpointData } from '../checkpoint/ReceiptData'
 
 export let storingAccountData = false
 const processedReceiptsMap: Map<string, number> = new Map()
@@ -1094,10 +1092,7 @@ export const storeReceiptData = async (
       timestamp: tx.timestamp,
       applyTimestamp,
     }
-    const receiptCheckpointData = new ReceiptCheckpointData(receipt as Receipt.Receipt)
-    // Add to checkpoint system
-    receiptCheckpointManager.addData(receiptCheckpointData, receipt.cycle.toString())
-    
+
     combineReceipts.push(receiptToStore)
     if (config.dataLogWrite && ReceiptLogWriter)
       ReceiptLogWriter.writeToLog(

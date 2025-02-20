@@ -250,7 +250,6 @@ let config: Config = {
     minSigRequired: 1,
     requiredSecurityLevel: 5
   },
-  maxRecordsPerRequest: 200, 
   checkpointBucketConfig: {
     BucketMatureAge: 11 * 60, // 11 minutes
     RadixDepth: 2, // 2 nibbles (1 hex char)
